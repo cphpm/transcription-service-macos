@@ -1,31 +1,22 @@
 # Audio/Video Transcription Service
 
-##CUSTOM SECTION DEVELOPER TO KEEP
-The GPU compose file is fine. The issue is likely that you rebuilt using docker compose build (which uses the default CPU docker-compose.yml), but you need to rebuild with the GPU compose file:
-
-
-docker compose -f docker-compose.gpu.yml build --build-arg HF_TOKEN=insert_token
-Then start it:
-
-
-docker compose -f docker-compose.gpu.yml up
-
 Flask-based transcription service using OpenAI's Whisper model with automatic speaker detection.
 
 ## Features
 
 - 🎙️ **Multi-format support**: MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM
 - 👥 **Speaker diarization**: Automatic detection of 2-6 speakers
-- 🚀 **Flexible processing**: CPU or GPU (NVIDIA) acceleration
+- 🚀 **Flexible processing**: CPU
 - 🎯 **Multiple models**: Base (fast), Medium (balanced), Large-v3 (accurate)
 - 🌐 **Web interface**: Drag-and-drop file upload with progress tracking
 - ⚡ **Real-time progress**: Live updates with cancellation support
+- 🎙️ **AI transcript processing**: Use either Gemini API key or Ollama for a local model
 
 ## Quick Start
 
 ### Option 1: CPU Mode (Works on All Systems)
 
-**Recommended for MacBooks and Windows PCs without NVIDIA GPU**
+**Recommended for MacBooks**
 
 ```bash
 # Build and start the service
@@ -35,24 +26,10 @@ docker-compose up --build
 open http://localhost:8080
 ```
 
-### Option 2: GPU Mode (NVIDIA GPUs only)
-
-**Requirements:**
-- NVIDIA GPU
-- [NVIDIA Docker runtime](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed
-
-```bash
-# Build and start with GPU support
-docker-compose -f docker-compose.gpu.yml up --build
-
-# Access the web interface
-open http://localhost:8080
-```
-
 ## Usage
 
 1. Open http://localhost:8080 in your browser
-2. Select processing device (CPU/GPU) and model size (Base/Medium/Large)
+2. Select processing device (CPU) and model size (Base/Medium/Large)
 3. Upload or drag-and-drop an audio/video file
 4. Click "Transcribe" and wait for processing
 5. View, copy, or download the transcript
@@ -95,16 +72,9 @@ Transcripts are saved in `./outputs/` with timestamps and speaker labels:
 ```bash
 # Stop and remove containers
 docker-compose down
-
-# For GPU version
-docker-compose -f docker-compose.gpu.yml down
 ```
 
 ## Troubleshooting
-
-### "could not select device driver nvidia"
-- You're trying to use GPU mode without NVIDIA GPU
-- **Solution**: Use the default `docker-compose.yml` (CPU mode)
 
 ### Slow transcription on Mac
 - This is normal - Macs use CPU processing
@@ -120,18 +90,8 @@ docker-compose -f docker-compose.gpu.yml down
     - "8081:5000"  # Use 8081 instead of 8080
   ```
 
-## Performance Expectations
-
-| Device | Model | Speed (approx) |
-|--------|-------|----------------|
-| MacBook (CPU) | Base | ~2x real-time |
-| MacBook (CPU) | Medium | ~4x real-time |
-| MacBook (CPU) | Large-v3 | ~8x real-time |
-| NVIDIA GPU | Base | ~0.3x real-time |
-| NVIDIA GPU | Medium | ~0.5x real-time |
-| NVIDIA GPU | Large-v3 | ~1x real-time |
-
-*Real-time = 1 minute to process 1 minute of audio*
+## AI transcription processing
+If you want to use AI for processing the transcript, you can use Cloud (Gemini) or Ollama locally. You'll need to respectively configure Gemini API key and or Ollama in .env
 
 ## License
 
