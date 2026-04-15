@@ -1,0 +1,15 @@
+services:
+  transcription:
+    build: .
+    container_name: transcription-service
+    ports:
+      - "8080:5000"
+    volumes:
+      - ./outputs:/app/outputs
+      - ./uploads:/app/uploads
+      - ./models:/app/models
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

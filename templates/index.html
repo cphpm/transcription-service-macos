@@ -1,0 +1,2283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio/Video Transcription with Speaker Detection</title>
+    <style>
+        /*
+         * Dark Charcoal Theme - Sophisticated & Professional
+         * Inspired by: Premium dark interfaces, Spotify, Apple Music
+         * Background: #1E1E1E (Deep Charcoal) - Elegant & modern
+         * Accent: #8B5CF6 (Purple) - Premium highlight
+         * Philosophy: Dark elegance with vibrant accents
+         */
+
+        :root {
+            --color-primary: #8B5CF6;
+            --color-primary-dark: #7C3AED;
+            --color-primary-light: #A78BFA;
+            --color-accent-pink: #EC4899;
+            --color-accent-teal: #14B8A6;
+            --color-dark: #1E1E1E;
+            --color-text-primary: #FFFFFF;
+            --color-text-secondary: #B4B4B4;
+            --color-text-tertiary: #8A8A8A;
+            --color-bg-primary: #1E1E1E;
+            --color-bg-secondary: #2A2A2A;
+            --color-bg-tertiary: #353535;
+            --color-border: #404040;
+            --color-success: #10B981;
+            --color-warning: #F59E0B;
+            --color-error: #EF4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+            background: var(--color-bg-primary);
+            min-height: 100vh;
+            padding: 20px;
+            color: var(--color-text-primary);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: var(--color-bg-secondary);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            overflow: hidden;
+            border: 1px solid var(--color-border);
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+            color: white;
+            padding: 48px 40px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(circle at 20% 50%, rgba(236, 72, 153, 0.2) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(20, 184, 166, 0.15) 0%, transparent 50%);
+            pointer-events: none;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 12px;
+            position: relative;
+            letter-spacing: -0.02em;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+            position: relative;
+            font-weight: 400;
+        }
+
+        /* Content */
+        .content {
+            padding: 40px;
+        }
+
+        /* Upload Area */
+        .upload-area {
+            border: 2px dashed var(--color-border);
+            border-radius: 12px;
+            padding: 60px 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            background: var(--color-bg-tertiary);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-area::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: var(--color-primary-light);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .upload-area:hover::before {
+            width: 400px;
+            height: 400px;
+        }
+
+        .upload-area:hover {
+            border-color: var(--color-primary);
+            background: var(--color-bg-secondary);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        }
+
+        .upload-area.drag-over {
+            border-color: var(--color-accent-pink);
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(236, 72, 153, 0.1) 100%);
+            transform: scale(1.01);
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+            position: relative;
+            z-index: 1;
+            filter: grayscale(0.3);
+        }
+
+        .upload-text {
+            font-size: 1.3em;
+            color: var(--color-text-primary);
+            margin-bottom: 10px;
+            font-weight: 600;
+            position: relative;
+            z-index: 1;
+        }
+
+        .upload-subtext {
+            color: var(--color-text-secondary);
+            font-size: 0.95em;
+            position: relative;
+            z-index: 1;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        /* Selectors */
+        .selector-card {
+            margin-top: 24px;
+            padding: 24px;
+            background: var(--color-bg-tertiary);
+            border-radius: 12px;
+            border: 1px solid var(--color-border);
+        }
+
+        .selector-card h4 {
+            margin: 0 0 16px 0;
+            color: var(--color-text-primary);
+            font-size: 1em;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-size: 0.85em;
+        }
+
+        .options-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .option {
+            position: relative;
+        }
+
+        .option input[type="radio"] {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .option-label {
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            background: var(--color-bg-secondary);
+            border: 2px solid var(--color-border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: center;
+            height: 100%;
+        }
+
+        .option input[type="radio"]:checked + .option-label {
+            border-color: var(--color-primary);
+            background: rgba(139, 92, 246, 0.15);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+        }
+
+        .option-label:hover {
+            border-color: var(--color-primary);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+
+        .option input[type="radio"]:disabled + .option-label {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .option input[type="radio"]:disabled + .option-label:hover {
+            transform: none;
+            border-color: var(--color-border);
+        }
+
+        .option-icon {
+            font-size: 2em;
+            margin-bottom: 8px;
+        }
+
+        .option-name {
+            font-weight: 600;
+            color: var(--color-text-primary);
+            margin-bottom: 4px;
+            font-size: 1em;
+        }
+
+        .option input[type="radio"]:checked + .option-label .option-name {
+            color: var(--color-primary);
+        }
+
+        .option-description {
+            font-size: 0.85em;
+            color: var(--color-text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .option-speed {
+            font-size: 0.8em;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        /* File Info */
+        .file-info {
+            margin-top: 24px;
+            padding: 20px;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.05) 0%, rgba(236, 72, 153, 0.05) 100%);
+            border-radius: 12px;
+            border: 1px solid var(--color-border);
+            border-left: 3px solid var(--color-primary);
+            display: none;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .file-info strong {
+            color: var(--color-text-primary);
+        }
+
+        .file-info #fileName {
+            color: var(--color-primary-light);
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Buttons */
+        .btn {
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+            color: white;
+            border: none;
+            padding: 14px 32px;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 16px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .btn:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .download-btn {
+            background: linear-gradient(135deg, var(--color-accent-teal) 0%, #0D9488 100%);
+            box-shadow: 0 4px 12px rgba(20, 184, 166, 0.3);
+            margin-left: 8px;
+        }
+
+        .download-btn:hover {
+            box-shadow: 0 6px 20px rgba(20, 184, 166, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .cancel-btn {
+            background: linear-gradient(135deg, var(--color-accent-pink) 0%, #DB2777 100%);
+            box-shadow: 0 4px 12px rgba(236, 72, 153, 0.3);
+            margin-left: 8px;
+        }
+
+        .cancel-btn:hover {
+            box-shadow: 0 6px 20px rgba(236, 72, 153, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+
+        /* Status Messages */
+        .status {
+            margin-top: 24px;
+            padding: 16px 20px;
+            border-radius: 8px;
+            display: none;
+            font-weight: 500;
+            animation: slideIn 0.3s ease-out;
+            border-left: 4px solid;
+        }
+
+        .status.show {
+            display: block;
+        }
+
+        .status.processing {
+            background: rgba(245, 158, 11, 0.15);
+            color: #FCD34D;
+            border-left-color: var(--color-warning);
+        }
+
+        .status.success {
+            background: rgba(16, 185, 129, 0.15);
+            color: #6EE7B7;
+            border-left-color: var(--color-success);
+        }
+
+        .status.error {
+            background: rgba(239, 68, 68, 0.15);
+            color: #FCA5A5;
+            border-left-color: var(--color-error);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--color-primary);
+            animation: spin 0.8s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            margin-top: 24px;
+            display: none;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .progress-container.show {
+            display: block;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .timer {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 1.1em;
+            color: var(--color-text-primary);
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .progress-bar-outer {
+            width: 100%;
+            height: 32px;
+            background: var(--color-bg-secondary);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.06);
+            position: relative;
+            border: 1px solid var(--color-border);
+        }
+
+        .progress-bar-inner {
+            height: 100%;
+            background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-accent-pink) 50%, var(--color-accent-teal) 100%);
+            background-size: 200% 100%;
+            animation: shimmer 3s linear infinite;
+            border-radius: 16px;
+            transition: width 0.3s ease;
+            position: relative;
+            min-width: 50px;
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+        }
+
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .progress-percentage {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            font-weight: 700;
+            color: var(--color-text-secondary);
+            font-size: 0.85em;
+            z-index: 1;
+            pointer-events: none;
+            text-shadow: 0 1px 2px rgba(255,255,255,0.5);
+        }
+
+        .progress-stages {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 8px;
+        }
+
+        .stage {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            background: var(--color-bg-tertiary);
+            transition: all 0.3s ease;
+            font-size: 0.85em;
+            border: 1px solid var(--color-border);
+        }
+
+        .stage.active {
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+            color: white;
+            font-weight: 600;
+            border-color: var(--color-primary);
+            box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+        }
+
+        .stage.completed {
+            background: linear-gradient(135deg, rgba(20, 184, 166, 0.2) 0%, rgba(20, 184, 166, 0.15) 100%);
+            color: #5EEAD4;
+            border-color: var(--color-accent-teal);
+        }
+
+        /* Transcript */
+        .transcript-container {
+            margin-top: 32px;
+            display: none;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .transcript-container.show {
+            display: block;
+        }
+
+        .transcript-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0;
+            padding: 20px 24px;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+            border-radius: 12px 12px 0 0;
+            color: white;
+        }
+
+        .transcript-header h3 {
+            margin: 0;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+
+        .copy-btn {
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            backdrop-filter: blur(10px);
+        }
+
+        .copy-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+            transform: translateY(-1px);
+        }
+
+        .copy-btn:active {
+            transform: translateY(0);
+        }
+
+        .copy-btn.copied {
+            background: var(--color-accent-teal);
+            border-color: var(--color-accent-teal);
+            color: white;
+        }
+
+        .transcript {
+            padding: 32px;
+            background: var(--color-bg-tertiary);
+            border-radius: 0 0 12px 12px;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            white-space: pre-wrap;
+            line-height: 1.8;
+            font-size: 0.9em;
+            border: 1px solid var(--color-border);
+            border-top: none;
+            color: var(--color-text-secondary);
+        }
+
+        .transcript::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .transcript::-webkit-scrollbar-track {
+            background: var(--color-bg-primary);
+            border-radius: 4px;
+        }
+
+        .transcript::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent-pink) 100%);
+            border-radius: 4px;
+        }
+
+        .transcript::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(135deg, var(--color-accent-pink) 0%, var(--color-primary) 100%);
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: relative;
+        }
+
+        .tooltip::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 6px 12px;
+            background: rgba(18, 24, 38, 0.95);
+            color: white;
+            border-radius: 6px;
+            font-size: 0.8em;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+            margin-bottom: 8px;
+            backdrop-filter: blur(8px);
+        }
+
+        .tooltip:hover::after {
+            opacity: 1;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .content {
+                padding: 24px;
+            }
+
+            .upload-area {
+                padding: 40px 16px;
+            }
+
+            .transcript-header {
+                flex-direction: column;
+                gap: 12px;
+                text-align: center;
+            }
+
+            .button-group {
+                justify-content: center;
+            }
+
+            .progress-stages {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* AI Analysis Section */
+        .ai-analysis-container {
+            margin-top: 32px;
+            padding: 32px;
+            background: var(--color-bg-tertiary);
+            border-radius: 12px;
+            border: 1px solid var(--color-border);
+            display: none;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .ai-analysis-container.show {
+            display: block;
+        }
+
+        .ai-analysis-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid var(--color-border);
+        }
+
+        .ai-analysis-header h3 {
+            margin: 0;
+            font-size: 1.3em;
+            font-weight: 600;
+            color: var(--color-text-primary);
+        }
+
+        .ai-actions {
+            margin-top: 24px;
+        }
+
+        .ai-actions h4 {
+            margin: 0 0 16px 0;
+            color: var(--color-text-primary);
+            font-size: 1em;
+            font-weight: 600;
+        }
+
+        .ai-btn {
+            background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+            min-width: 150px;
+        }
+
+        .ai-btn:hover:not(:disabled) {
+            box-shadow: 0 6px 20px rgba(124, 58, 237, 0.4);
+        }
+
+        .custom-prompt-section {
+            margin-top: 24px;
+        }
+
+        .custom-prompt-section label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--color-text-primary);
+            font-weight: 600;
+            font-size: 0.95em;
+        }
+
+        .custom-prompt-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--color-bg-secondary);
+            border: 2px solid var(--color-border);
+            border-radius: 8px;
+            color: var(--color-text-primary);
+            font-family: inherit;
+            font-size: 0.95em;
+            resize: vertical;
+            transition: all 0.2s ease;
+            margin-bottom: 12px;
+            box-sizing: border-box;
+        }
+
+        .custom-prompt-input:focus {
+            outline: none;
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+        }
+
+        .custom-prompt-input:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .ai-results {
+            margin-top: 24px;
+            background: var(--color-bg-secondary);
+            border-radius: 12px;
+            border: 1px solid var(--color-border);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .ai-results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+            border-radius: 12px 12px 0 0;
+            color: white;
+        }
+
+        .ai-results-header h4 {
+            margin: 0;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+
+        .ai-results-content {
+            padding: 32px;
+            color: var(--color-text-secondary);
+            line-height: 1.8;
+            font-size: 0.95em;
+            white-space: pre-wrap;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .ai-results-content::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .ai-results-content::-webkit-scrollbar-track {
+            background: var(--color-bg-primary);
+            border-radius: 4px;
+        }
+
+        .ai-results-content::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
+            border-radius: 4px;
+        }
+
+        #aiStatus {
+            margin-top: 16px;
+        }
+
+        /* ===== INPUT MODE TABS ===== */
+        .input-mode-tabs {
+            display: flex;
+            gap: 0;
+            border-radius: 12px 12px 0 0;
+            overflow: hidden;
+            border: 1px solid var(--color-border);
+            border-bottom: none;
+        }
+
+        .input-tab {
+            flex: 1;
+            padding: 14px 24px;
+            background: var(--color-bg-tertiary);
+            color: var(--color-text-secondary);
+            border: none;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+            border-bottom: 3px solid transparent;
+        }
+
+        .input-tab:hover {
+            background: var(--color-bg-secondary);
+            color: var(--color-text-primary);
+        }
+
+        .input-tab.active {
+            background: var(--color-bg-secondary);
+            color: var(--color-primary-light);
+            border-bottom-color: var(--color-primary);
+        }
+
+        /* ===== UPLOAD PANEL ===== */
+        .upload-panel .upload-area {
+            border-radius: 0 0 12px 12px;
+            border-top: none;
+        }
+
+        /* ===== RECORDING PANEL ===== */
+        .recording-panel {
+            background: var(--color-bg-tertiary);
+            border: 1px solid var(--color-border);
+            border-top: none;
+            border-radius: 0 0 12px 12px;
+            padding: 28px 24px 24px;
+            margin-bottom: 24px;
+        }
+
+        .recording-permission-error {
+            background: rgba(239, 68, 68, 0.12);
+            border: 1px solid var(--color-error);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: #FCA5A5;
+            font-size: 0.9em;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .recording-visualizer-wrap {
+            width: 100%;
+            background: var(--color-bg-secondary);
+            border-radius: 8px;
+            border: 1px solid var(--color-border);
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+
+        #audioVisualizer {
+            display: block;
+            width: 100%;
+            height: 64px;
+        }
+
+        .recording-meta {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            min-height: 28px;
+        }
+
+        .rec-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: transparent;
+            transition: background 0.3s ease;
+            flex-shrink: 0;
+        }
+
+        .rec-indicator.recording {
+            background: var(--color-error);
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+            animation: recPulse 1.2s ease-in-out infinite;
+        }
+
+        @keyframes recPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.85); }
+        }
+
+        .rec-timer {
+            font-size: 1.4em;
+            font-weight: 700;
+            color: var(--color-text-primary);
+            font-variant-numeric: tabular-nums;
+            min-width: 48px;
+            text-align: center;
+            font-family: monospace;
+        }
+
+        .recording-btn-row {
+            display: flex;
+            justify-content: center;
+        }
+
+        .rec-btn-stop {
+            background: linear-gradient(135deg, var(--color-error) 0%, #B91C1C 100%) !important;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35) !important;
+        }
+
+        .rec-btn-stop:hover {
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45) !important;
+        }
+
+        .recording-review {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .recording-review-label {
+            color: var(--color-text-secondary);
+            font-size: 0.85em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .recording-review audio {
+            width: 100%;
+            max-width: 480px;
+            border-radius: 8px;
+            accent-color: var(--color-primary);
+        }
+
+        .recording-review-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .rec-btn-secondary {
+            background: var(--color-bg-secondary);
+            color: var(--color-text-primary);
+            border: 2px solid var(--color-border);
+            box-shadow: none;
+            margin-top: 0;
+        }
+
+        .rec-btn-secondary:hover {
+            border-color: var(--color-primary);
+            background: var(--color-bg-tertiary);
+            box-shadow: none;
+            transform: translateY(-2px);
+        }
+
+        /* ===== SOURCE BADGE ===== */
+        .source-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.78em;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 20px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .source-badge.badge-mic {
+            background: rgba(139, 92, 246, 0.15);
+            color: var(--color-primary-light);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+        }
+
+        .source-badge.badge-file {
+            background: rgba(20, 184, 166, 0.1);
+            color: var(--color-accent-teal);
+            border: 1px solid rgba(20, 184, 166, 0.25);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 480px) {
+            .input-tab {
+                padding: 12px 16px;
+                font-size: 0.9em;
+            }
+            .rec-timer {
+                font-size: 1.2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎙️ Transcription Service</h1>
+            <p>Upload audio or video files for automatic transcription with speaker identification</p>
+        </div>
+
+        <div class="content">
+
+            <!-- Input mode tab switcher -->
+            <div class="input-mode-tabs" id="inputModeTabs">
+                <button class="input-tab active" id="tabUpload">📁 Upload File</button>
+                <button class="input-tab" id="tabRecord">🎙️ Record Audio</button>
+            </div>
+
+            <!-- Upload panel (default) -->
+            <div class="upload-panel" id="uploadPanel">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <div class="upload-text">Click to upload or drag and drop</div>
+                    <div class="upload-subtext">Supports MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM</div>
+                    <input type="file" id="fileInput" accept="audio/*,video/*">
+                </div>
+            </div>
+
+            <!-- Recording panel (hidden by default) -->
+            <div class="recording-panel" id="recordingPanel" style="display:none;">
+
+                <!-- Permission / device error -->
+                <div class="recording-permission-error" id="recordingPermissionError" style="display:none;">
+                    <span>🚫</span>
+                    <span id="recordingPermissionMsg">Microphone access denied.</span>
+                </div>
+
+                <!-- Recording controls -->
+                <div id="recordingControls">
+                    <div class="recording-visualizer-wrap">
+                        <canvas id="audioVisualizer"></canvas>
+                    </div>
+                    <div class="recording-meta">
+                        <span class="rec-indicator" id="recIndicator"></span>
+                        <span class="rec-timer" id="recTimerDisplay">0:00</span>
+                    </div>
+                    <div class="recording-btn-row">
+                        <button class="btn" id="startRecordBtn">🎙️ Start Recording</button>
+                    </div>
+                </div>
+
+                <!-- Post-recording review -->
+                <div id="recordingReview" style="display:none;">
+                    <div class="recording-review">
+                        <div class="recording-review-label">Recording Preview</div>
+                        <audio id="recordingPlayback" controls></audio>
+                        <div class="recording-review-actions">
+                            <button class="btn" id="useRecordingBtn">✅ Use This Recording</button>
+                            <button class="btn rec-btn-secondary" id="saveRecordingBtn">💾 Save Recording</button>
+                            <button class="btn rec-btn-secondary" id="rerecordBtn">🔄 Re-record</button>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="selector-card">
+                <h4>
+                    <span>⚙️</span>
+                    <span>Processing Device</span>
+                </h4>
+                <div class="options-grid">
+                    <div class="option">
+                        <input type="radio" id="deviceGPU" name="device" value="cuda">
+                        <label for="deviceGPU" class="option-label">
+                            <div class="option-icon">🚀</div>
+                            <div class="option-name">NVIDIA GPU</div>
+                            <div class="option-speed" style="color: var(--color-accent-teal);">⚡ Very Fast</div>
+                        </label>
+                    </div>
+                    <div class="option">
+                        <input type="radio" id="deviceCPU" name="device" value="cpu" checked>
+                        <label for="deviceCPU" class="option-label">
+                            <div class="option-icon">🖥️</div>
+                            <div class="option-name">CPU</div>
+                            <div class="option-speed" style="color: var(--color-text-tertiary);">🐢 Slower (universal)</div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="selector-card">
+                <h4>
+                    <span>🤖</span>
+                    <span>Whisper Model</span>
+                </h4>
+                <div class="options-grid">
+                    <div class="option">
+                        <input type="radio" id="modelBase" name="model" value="base" checked>
+                        <label for="modelBase" class="option-label">
+                            <div class="option-icon">⚡</div>
+                            <div class="option-name">Base</div>
+                            <div class="option-speed" style="color: var(--color-accent-teal);">🚀 Fastest</div>
+                        </label>
+                    </div>
+                    <div class="option">
+                        <input type="radio" id="modelMedium" name="model" value="medium">
+                        <label for="modelMedium" class="option-label">
+                            <div class="option-icon">⚖️</div>
+                            <div class="option-name">Medium</div>
+                            <div class="option-speed" style="color: var(--color-warning);">⭐ Balanced</div>
+                        </label>
+                    </div>
+                    <div class="option">
+                        <input type="radio" id="modelLarge" name="model" value="large-v3">
+                        <label for="modelLarge" class="option-label">
+                            <div class="option-icon">🎯</div>
+                            <div class="option-name">Large-v3</div>
+                            <div class="option-speed" style="color: var(--color-accent-pink);">💎 Best Accuracy</div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="selector-card" id="diarizationSelectorCard">
+                <h4>
+                    <span>👥</span>
+                    <span>Speaker Detection</span>
+                </h4>
+                <div class="options-grid">
+                    <div class="option">
+                        <input type="radio" id="diarizeFast" name="diarization" value="fast">
+                        <label for="diarizeFast" class="option-label">
+                            <div class="option-icon">⚡</div>
+                            <div class="option-name">Fast</div>
+                            <div class="option-speed" style="color: var(--color-accent-teal);">🚀 Fastest</div>
+                        </label>
+                    </div>
+                    <div class="option">
+                        <input type="radio" id="diarizeAccurate" name="diarization" value="accurate" checked>
+                        <label for="diarizeAccurate" class="option-label">
+                            <div class="option-icon">🧠</div>
+                            <div class="option-name">Accurate</div>
+                            <div class="option-speed" style="color: var(--color-warning);">⭐ Neural Embeddings</div>
+                        </label>
+                    </div>
+                    <div class="option" id="diarizeMaxOption" style="display: none;">
+                        <input type="radio" id="diarizeMaximum" name="diarization" value="maximum">
+                        <label for="diarizeMaximum" class="option-label">
+                            <div class="option-icon">🎯</div>
+                            <div class="option-name">Maximum Fidelity</div>
+                            <div class="option-speed" style="color: var(--color-accent-pink);">💎 Best (pyannote)</div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="file-info" id="fileInfo">
+                <strong>Selected file:</strong> <span id="fileName"></span><span id="sourceBadge" class="source-badge"></span>
+                <div class="button-group">
+                    <button class="btn" id="uploadBtn">✨ Transcribe</button>
+                    <button class="btn cancel-btn" id="cancelBtn" style="display: none;">❌ Cancel</button>
+                </div>
+            </div>
+
+            <div class="status" id="status"></div>
+
+            <div class="progress-container" id="progressContainer">
+                <div class="progress-header">
+                    <div class="timer">
+                        <span class="timer-icon">⏱️</span>
+                        <span id="timerDisplay">00:00</span>
+                    </div>
+                </div>
+                <div class="progress-bar-outer">
+                    <div class="progress-bar-inner" id="progressBar" style="width: 0%"></div>
+                    <span class="progress-percentage" id="progressPercentage">0%</span>
+                </div>
+                <div class="progress-stages">
+                    <div class="stage" id="stage1">
+                        <span>📤</span>
+                        <span>Uploading</span>
+                    </div>
+                    <div class="stage" id="stage2">
+                        <span>🎵</span>
+                        <span>Processing</span>
+                    </div>
+                    <div class="stage" id="stage3">
+                        <span>📝</span>
+                        <span>Transcribing</span>
+                    </div>
+                    <div class="stage" id="stage4">
+                        <span>👥</span>
+                        <span>Speakers</span>
+                    </div>
+                    <div class="stage" id="stage5">
+                        <span>✅</span>
+                        <span>Complete</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="transcript-container" id="transcriptContainer">
+                <div class="transcript-header">
+                    <h3>📝 Transcript</h3>
+                    <button class="copy-btn tooltip" id="copyBtn" data-tooltip="Copy to clipboard">
+                        <span id="copyIcon">📋</span>
+                        <span id="copyText">Copy</span>
+                    </button>
+                </div>
+                <div class="transcript" id="transcript"></div>
+            </div>
+
+            <!-- AI Analysis Section -->
+            <div class="ai-analysis-container" id="aiAnalysisContainer">
+                <div class="ai-analysis-header">
+                    <h3>🤖 AI Analysis</h3>
+                </div>
+
+                <!-- Model Selection -->
+                <div class="selector-card">
+                    <h4>
+                        <span>🧠</span>
+                        <span>AI Model Selection</span>
+                    </h4>
+                    <div class="options-grid">
+                        <div class="option">
+                            <input type="radio" id="aiModelGemma" name="aiModel" value="gemma" checked>
+                            <label for="aiModelGemma" class="option-label">
+                                <div class="option-icon">🏠</div>
+                                <div class="option-name">Local Gemma3</div>
+                                <div class="option-description">via Ollama</div>
+                                <div class="option-speed" style="color: var(--color-accent-teal);">🔒 Private</div>
+                            </label>
+                        </div>
+                        <div class="option">
+                            <input type="radio" id="aiModelGemini" name="aiModel" value="gemini">
+                            <label for="aiModelGemini" class="option-label">
+                                <div class="option-icon">☁️</div>
+                                <div class="option-name">Cloud Gemini</div>
+                                <div class="option-description">via Google API</div>
+                                <div class="option-speed" style="color: var(--color-accent-pink);">⚡ Faster</div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analysis Actions -->
+                <div class="ai-actions">
+                    <h4>Analysis Options</h4>
+                    <div class="button-group">
+                        <button class="btn ai-btn" id="summarizeBtn" disabled>
+                            📝 Summarize
+                        </button>
+                        <button class="btn ai-btn" id="insightsBtn" disabled>
+                            💡 Extract Insights
+                        </button>
+                    </div>
+
+                    <div class="custom-prompt-section">
+                        <label for="customPrompt">Custom Prompt:</label>
+                        <textarea
+                            id="customPrompt"
+                            class="custom-prompt-input"
+                            placeholder="Enter your custom analysis prompt here..."
+                            rows="3"
+                            disabled
+                        ></textarea>
+                        <button class="btn ai-btn" id="customPromptBtn" disabled>
+                            🎯 Run Custom Prompt
+                        </button>
+                    </div>
+                </div>
+
+                <!-- AI Status -->
+                <div class="status" id="aiStatus"></div>
+
+                <!-- AI Results -->
+                <div class="ai-results" id="aiResults" style="display: none;">
+                    <div class="ai-results-header">
+                        <h4>📊 Analysis Results</h4>
+                        <button class="copy-btn tooltip" id="copyAiBtn" data-tooltip="Copy analysis">
+                            <span id="copyAiIcon">📋</span>
+                            <span id="copyAiText">Copy</span>
+                        </button>
+                    </div>
+                    <div class="ai-results-content" id="aiResultsContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const status = document.getElementById('status');
+        const transcriptContainer = document.getElementById('transcriptContainer');
+        const transcript = document.getElementById('transcript');
+        const copyBtn = document.getElementById('copyBtn');
+        const copyIcon = document.getElementById('copyIcon');
+        const copyText = document.getElementById('copyText');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressPercentage = document.getElementById('progressPercentage');
+        const timerDisplay = document.getElementById('timerDisplay');
+        const cancelBtn = document.getElementById('cancelBtn');
+
+        let selectedFile = null;
+        let downloadUrl = null;
+        let transcriptText = '';
+        let timerInterval = null;
+        let startTime = null;
+        let estimatedDuration = 0;
+        let abortController = null;
+        let currentTaskId = null;
+
+        // ============================================================
+        // MICROPHONE RECORDING SUBSYSTEM
+        // ============================================================
+
+        // --- Recording state ---
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let recordedBlob = null;
+        let recTimerInterval = null;
+        let recStartTime = null;
+        let recDurationMs = 0;
+        let audioCtx = null;
+        let analyserNode = null;
+        let micSourceNode = null;
+        let vizFrameId = null;
+        let activeStream = null;
+        let activeInputMode = 'upload'; // 'upload' | 'record'
+
+        // --- DOM references ---
+        const tabUpload             = document.getElementById('tabUpload');
+        const tabRecord             = document.getElementById('tabRecord');
+        const uploadPanel           = document.getElementById('uploadPanel');
+        const recordingPanel        = document.getElementById('recordingPanel');
+        const recPermissionError    = document.getElementById('recordingPermissionError');
+        const recPermissionMsg      = document.getElementById('recordingPermissionMsg');
+        const recordingControls     = document.getElementById('recordingControls');
+        const recordingReview       = document.getElementById('recordingReview');
+        const startRecordBtn        = document.getElementById('startRecordBtn');
+        const recTimerDisplay       = document.getElementById('recTimerDisplay');
+        const recIndicator          = document.getElementById('recIndicator');
+        const audioVisualizer       = document.getElementById('audioVisualizer');
+        const recordingPlayback     = document.getElementById('recordingPlayback');
+        const useRecordingBtn       = document.getElementById('useRecordingBtn');
+        const saveRecordingBtn      = document.getElementById('saveRecordingBtn');
+        const rerecordBtn           = document.getElementById('rerecordBtn');
+        const sourceBadge           = document.getElementById('sourceBadge');
+
+        // --- Tab switching ---
+        tabUpload.addEventListener('click', () => switchInputMode('upload'));
+        tabRecord.addEventListener('click',  () => switchInputMode('record'));
+
+        function switchInputMode(mode) {
+            if (mode === activeInputMode) return;
+            activeInputMode = mode;
+
+            if (mode === 'upload') {
+                tabUpload.classList.add('active');
+                tabRecord.classList.remove('active');
+                uploadPanel.style.display  = 'block';
+                recordingPanel.style.display = 'none';
+                // Clear any recording-derived selected file
+                if (selectedFile && selectedFile.name && selectedFile.name.startsWith('recording_')) {
+                    selectedFile = null;
+                    fileInfo.classList.remove('show');
+                }
+                // Stop any in-progress recording
+                if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+            } else {
+                tabRecord.classList.add('active');
+                tabUpload.classList.remove('active');
+                recordingPanel.style.display = 'block';
+                uploadPanel.style.display  = 'none';
+                // Clear file-upload-derived selected file
+                if (selectedFile && !(selectedFile.name && selectedFile.name.startsWith('recording_'))) {
+                    selectedFile = null;
+                    fileInfo.classList.remove('show');
+                    fileInput.value = '';
+                }
+            }
+        }
+
+        // --- Recording timer ---
+        function startRecTimer() {
+            recStartTime = Date.now();
+            recTimerInterval = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - recStartTime) / 1000);
+                const m = Math.floor(elapsed / 60);
+                const s = elapsed % 60;
+                recTimerDisplay.textContent = `${m}:${String(s).padStart(2, '0')}`;
+            }, 500);
+        }
+
+        function stopRecTimer() {
+            clearInterval(recTimerInterval);
+            recTimerInterval = null;
+        }
+
+        // --- Visualizer ---
+        function startVisualizer(stream) {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                analyserNode = audioCtx.createAnalyser();
+                analyserNode.fftSize = 256;
+                micSourceNode = audioCtx.createMediaStreamSource(stream);
+                micSourceNode.connect(analyserNode);
+
+                const bufLen = analyserNode.frequencyBinCount;
+                const data   = new Uint8Array(bufLen);
+                const canvas = audioVisualizer;
+                const ctx    = canvas.getContext('2d');
+
+                // Size canvas to its CSS display size
+                canvas.width  = canvas.offsetWidth  || 500;
+                canvas.height = canvas.offsetHeight || 64;
+                const W = canvas.width, H = canvas.height;
+
+                function draw() {
+                    vizFrameId = requestAnimationFrame(draw);
+                    analyserNode.getByteFrequencyData(data);
+                    ctx.clearRect(0, 0, W, H);
+                    // Background
+                    ctx.fillStyle = '#1A1A2E';
+                    ctx.fillRect(0, 0, W, H);
+                    // Bars with purple→pink gradient
+                    const barW = (W / bufLen) * 2.2;
+                    let x = 0;
+                    for (let i = 0; i < bufLen; i++) {
+                        const barH = (data[i] / 255) * H * 0.9;
+                        const t = i / bufLen;
+                        const r = Math.round(139 + (236 - 139) * t);
+                        const g = Math.round(92  + (72  - 92)  * t);
+                        const b = Math.round(246 + (153 - 246) * t);
+                        ctx.fillStyle = `rgb(${r},${g},${b})`;
+                        ctx.fillRect(x, H - barH, Math.max(barW - 1, 1), barH);
+                        x += barW;
+                    }
+                }
+                draw();
+            } catch (e) {
+                console.warn('Visualizer unavailable:', e);
+            }
+        }
+
+        function stopVisualizer() {
+            if (vizFrameId) { cancelAnimationFrame(vizFrameId); vizFrameId = null; }
+            const ctx = audioVisualizer.getContext('2d');
+            ctx.clearRect(0, 0, audioVisualizer.width, audioVisualizer.height);
+            if (micSourceNode) { try { micSourceNode.disconnect(); } catch(e){} micSourceNode = null; }
+            if (analyserNode)  { try { analyserNode.disconnect();  } catch(e){} analyserNode  = null; }
+            if (audioCtx && audioCtx.state !== 'closed') { audioCtx.close().catch(()=>{}); audioCtx = null; }
+        }
+
+        // --- MIME type probe ---
+        function getSupportedMimeType() {
+            const candidates = [
+                'audio/webm;codecs=opus',
+                'audio/webm',
+                'audio/ogg;codecs=opus',
+                'audio/ogg',
+                'audio/mp4'
+            ];
+            for (const mime of candidates) {
+                if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(mime)) return mime;
+            }
+            return '';
+        }
+
+        // --- Generate timestamped filename ---
+        function recFilename(mime) {
+            const now = new Date();
+            const pad = n => String(n).padStart(2, '0');
+            const ts  = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+            let ext = 'webm';
+            if (mime && (mime.includes('mp4') || mime.includes('m4a'))) ext = 'mp4';
+            return `recording_${ts}.${ext}`;
+        }
+
+        // --- Core recording ---
+        async function startRecording() {
+            recordedChunks = [];
+            recordedBlob   = null;
+            recPermissionError.style.display = 'none';
+
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            } catch (err) {
+                let msg = 'Could not access microphone.';
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    msg = 'Microphone access denied. Please allow microphone access in your browser settings and reload the page.';
+                } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                    msg = 'No microphone found. Please connect a microphone and try again.';
+                } else if (err.name === 'NotReadableError') {
+                    msg = 'Microphone is in use by another application. Please close it and try again.';
+                } else {
+                    msg = `Could not access microphone: ${err.message}`;
+                }
+                recPermissionMsg.textContent = msg;
+                recPermissionError.style.display = 'flex';
+                return;
+            }
+
+            activeStream = stream;
+            const mimeType = getSupportedMimeType();
+            try {
+                mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+            } catch (e) {
+                mediaRecorder = new MediaRecorder(stream);
+            }
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                const actualMime = mediaRecorder.mimeType || 'audio/webm';
+                const raw = new Blob(recordedChunks, { type: actualMime });
+                recordedBlob = await fixWebMDuration(raw, recDurationMs);
+                showRecordingReview(recordedBlob);
+            };
+
+            mediaRecorder.start(100);
+
+            startRecordBtn.textContent = '⏹️ Stop Recording';
+            startRecordBtn.classList.add('rec-btn-stop');
+            recIndicator.classList.add('recording');
+            startRecTimer();
+            startVisualizer(stream);
+        }
+
+        function stopRecording() {
+            if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+            recDurationMs = recStartTime ? Date.now() - recStartTime : 0;
+            mediaRecorder.stop();
+            if (activeStream) { activeStream.getTracks().forEach(t => t.stop()); activeStream = null; }
+            stopRecTimer();
+            stopVisualizer();
+            startRecordBtn.textContent = '🎙️ Start Recording';
+            startRecordBtn.classList.remove('rec-btn-stop');
+            recIndicator.classList.remove('recording');
+        }
+
+        // Patch the Duration field in a MediaRecorder WebM blob. MediaRecorder does not write
+        // duration metadata, so audio.duration === Infinity and scrubbing is broken.
+        // We scan for the EBML Duration element (ID 0x44 0x89, size 0x88 = 8-byte float64)
+        // and overwrite its value with the known elapsed time in milliseconds.
+        async function fixWebMDuration(blob, durationMs) {
+            if (!durationMs || durationMs <= 0) return blob;
+            try {
+                const buffer = await blob.arrayBuffer();
+                const data = new Uint8Array(buffer);
+                for (let i = 0; i < data.length - 11; i++) {
+                    if (data[i] === 0x44 && data[i + 1] === 0x89 && data[i + 2] === 0x88) {
+                        new DataView(buffer).setFloat64(i + 3, durationMs, false);
+                        return new Blob([buffer], { type: blob.type });
+                    }
+                }
+            } catch (e) { /* ignore, return original */ }
+            return blob;
+        }
+
+        function showRecordingReview(blob) {
+            if (recordingPlayback.src && recordingPlayback.src.startsWith('blob:')) {
+                URL.revokeObjectURL(recordingPlayback.src);
+            }
+            recordingPlayback.src = URL.createObjectURL(blob);
+            recordingControls.style.display = 'none';
+            recordingReview.style.display   = 'block';
+        }
+
+        function resetRecordingUI() {
+            if (recordingPlayback.src && recordingPlayback.src.startsWith('blob:')) {
+                URL.revokeObjectURL(recordingPlayback.src);
+                recordingPlayback.src = '';
+            }
+            recordedChunks = [];
+            recordedBlob   = null;
+            recTimerDisplay.textContent = '0:00';
+            recIndicator.classList.remove('recording');
+            recordingReview.style.display   = 'none';
+            recordingControls.style.display = 'block';
+            startRecordBtn.textContent = '🎙️ Start Recording';
+            startRecordBtn.classList.remove('rec-btn-stop');
+            const ctx = audioVisualizer.getContext('2d');
+            ctx.clearRect(0, 0, audioVisualizer.width, audioVisualizer.height);
+        }
+
+        // --- Recording button handlers ---
+        startRecordBtn.addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
+
+        useRecordingBtn.addEventListener('click', () => {
+            if (!recordedBlob) return;
+            const name = recFilename(recordedBlob.type);
+            const recFile = new File([recordedBlob], name, { type: recordedBlob.type });
+            selectedFile = recFile;
+            fileName.textContent = name;
+            sourceBadge.textContent = '🎙️ Recording';
+            sourceBadge.className = 'source-badge badge-mic';
+            fileInfo.classList.add('show');
+            status.classList.remove('show');
+            transcriptContainer.classList.remove('show');
+            resetProgress();
+            stopTimer();
+            timerDisplay.textContent = '00:00';
+            fileInfo.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
+
+        saveRecordingBtn.addEventListener('click', () => {
+            if (!recordedBlob) return;
+            const name = recFilename(recordedBlob.type);
+            const url  = URL.createObjectURL(recordedBlob);
+            const a    = document.createElement('a');
+            a.href     = url;
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            // Revoke shortly after to allow the download to initiate
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+        });
+
+        rerecordBtn.addEventListener('click', () => {
+            resetRecordingUI();
+            if (selectedFile && selectedFile.name && selectedFile.name.startsWith('recording_')) {
+                selectedFile = null;
+                fileInfo.classList.remove('show');
+            }
+        });
+
+        // ============================================================
+        // END MICROPHONE RECORDING SUBSYSTEM
+        // ============================================================
+
+        // Fetch system info on page load
+        async function loadSystemInfo() {
+            try {
+                const response = await fetch('/health');
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                const contentType = response.headers.get("content-type");
+                if (!contentType || !contentType.includes("application/json")) {
+                    throw new Error("Response is not JSON");
+                }
+
+                const data = await response.json();
+                const deviceSelectorCard = document.querySelector('.selector-card');
+
+                if (!data.cuda_available) {
+                    // Hide the entire device selector when GPU is not available
+                    if (deviceSelectorCard) {
+                        deviceSelectorCard.style.display = 'none';
+                    }
+                    // Ensure CPU is selected by default
+                    const deviceCPUInput = document.getElementById('deviceCPU');
+                    if (deviceCPUInput) {
+                        deviceCPUInput.checked = true;
+                    }
+                }
+
+                // Diarization method availability
+                if (data.diarization) {
+                    const diarizeAccurate = document.getElementById('diarizeAccurate');
+                    const diarizeMaxOption = document.getElementById('diarizeMaxOption');
+
+                    if (!data.diarization.accurate) {
+                        diarizeAccurate.disabled = true;
+                        // Fall back to Fast if Accurate is unavailable
+                        document.getElementById('diarizeFast').checked = true;
+                    }
+                    if (data.diarization.maximum) {
+                        // Only show Maximum Fidelity when pyannote + HF_TOKEN are configured
+                        diarizeMaxOption.style.display = '';
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to fetch system info:', error);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', loadSystemInfo);
+
+        // Cancel button handler
+        cancelBtn.addEventListener('click', async () => {
+            if (currentTaskId) {
+                try {
+                    await fetch(`/cancel/${currentTaskId}`, { method: 'POST' });
+                } catch (error) {
+                    console.error('Error cancelling task:', error);
+                }
+            }
+
+            if (abortController) abortController.abort();
+
+            stopTimer();
+            resetProgress();
+            status.className = 'status error show';
+            status.innerHTML = '🛑 Transcription cancelled by user';
+            uploadBtn.disabled = false;
+            cancelBtn.style.display = 'none';
+            currentTaskId = null;
+        });
+
+        const stages = [
+            { id: 'stage1', duration: 5, name: 'Uploading' },
+            { id: 'stage2', duration: 10, name: 'Processing Audio' },
+            { id: 'stage3', duration: 70, name: 'Transcribing' },
+            { id: 'stage4', duration: 10, name: 'Detecting Speakers' },
+            { id: 'stage5', duration: 5, name: 'Complete' }
+        ];
+
+        function startTimer() {
+            startTime = Date.now();
+            timerInterval = setInterval(updateTimer, 100);
+        }
+
+        function stopTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+        }
+
+        function updateTimer() {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = elapsed % 60;
+            timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function estimateProcessingTime(fileSize) {
+            const fileSizeMB = fileSize / (1024 * 1024);
+            return Math.max(30, Math.min(fileSizeMB * 6, 300));
+        }
+
+        function startProgress() {
+            progressContainer.classList.add('show');
+            progressBar.style.width = '0%';
+            progressPercentage.textContent = '0%';
+
+            stages.forEach(stage => {
+                const element = document.getElementById(stage.id);
+                element.classList.remove('active', 'completed');
+            });
+
+            document.getElementById('stage1').classList.add('active');
+            animateProgress();
+        }
+
+        function animateProgress() {
+            let progress = 0;
+            let currentStageIndex = 0;
+            const elapsed = () => (Date.now() - startTime) / 1000;
+
+            const progressInterval = setInterval(() => {
+                const elapsedTime = elapsed();
+                const expectedProgress = Math.min((elapsedTime / estimatedDuration) * 100 * 0.8, 95);
+
+                if (progress < expectedProgress) {
+                    progress = Math.min(progress + 0.5, expectedProgress);
+                }
+
+                progressBar.style.width = progress + '%';
+                progressPercentage.textContent = Math.floor(progress) + '%';
+
+                let cumulativeDuration = 0;
+                for (let i = 0; i < stages.length; i++) {
+                    cumulativeDuration += stages[i].duration;
+                    const stageProgress = (cumulativeDuration / 100) * 100;
+                    const element = document.getElementById(stages[i].id);
+
+                    if (progress < stageProgress) {
+                        if (i !== currentStageIndex) {
+                            for (let j = 0; j < i; j++) {
+                                const prevElement = document.getElementById(stages[j].id);
+                                prevElement.classList.remove('active');
+                                prevElement.classList.add('completed');
+                            }
+                            element.classList.add('active');
+                            currentStageIndex = i;
+                        }
+                        break;
+                    }
+                }
+            }, 100);
+
+            window.progressInterval = progressInterval;
+        }
+
+        function completeProgress() {
+            if (window.progressInterval) clearInterval(window.progressInterval);
+
+            progressBar.style.width = '100%';
+            progressPercentage.textContent = '100%';
+
+            stages.forEach(stage => {
+                const element = document.getElementById(stage.id);
+                element.classList.remove('active');
+                element.classList.add('completed');
+            });
+        }
+
+        function resetProgress() {
+            if (window.progressInterval) clearInterval(window.progressInterval);
+            progressContainer.classList.remove('show');
+            progressBar.style.width = '0%';
+            progressPercentage.textContent = '0%';
+
+            stages.forEach(stage => {
+                const element = document.getElementById(stage.id);
+                element.classList.remove('active', 'completed');
+            });
+        }
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                selectedFile = e.target.files[0];
+                fileName.textContent = selectedFile.name;
+                sourceBadge.textContent = '📁 File';
+                sourceBadge.className = 'source-badge badge-file';
+                fileInfo.classList.add('show');
+                status.classList.remove('show');
+                transcriptContainer.classList.remove('show');
+                resetProgress();
+                stopTimer();
+                timerDisplay.textContent = '00:00';
+            }
+        });
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('drag-over');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+
+            if (e.dataTransfer.files.length > 0) {
+                selectedFile = e.dataTransfer.files[0];
+                fileName.textContent = selectedFile.name;
+                sourceBadge.textContent = '📁 File';
+                sourceBadge.className = 'source-badge badge-file';
+                fileInfo.classList.add('show');
+                status.classList.remove('show');
+                transcriptContainer.classList.remove('show');
+                resetProgress();
+                stopTimer();
+                timerDisplay.textContent = '00:00';
+            }
+        });
+
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(transcriptText);
+                copyBtn.classList.add('copied');
+                copyIcon.textContent = '✓';
+                copyText.textContent = 'Copied!';
+
+                setTimeout(() => {
+                    copyBtn.classList.remove('copied');
+                    copyIcon.textContent = '📋';
+                    copyText.textContent = 'Copy';
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy text: ', err);
+                const textArea = document.createElement('textarea');
+                textArea.value = transcriptText;
+                textArea.style.position = 'fixed';
+                textArea.style.opacity = '0';
+                document.body.appendChild(textArea);
+                textArea.select();
+
+                try {
+                    document.execCommand('copy');
+                    copyBtn.classList.add('copied');
+                    copyIcon.textContent = '✓';
+                    copyText.textContent = 'Copied!';
+
+                    setTimeout(() => {
+                        copyBtn.classList.remove('copied');
+                        copyIcon.textContent = '📋';
+                        copyText.textContent = 'Copy';
+                    }, 2000);
+                } catch (err) {
+                    alert('Failed to copy text. Please copy manually.');
+                }
+
+                document.body.removeChild(textArea);
+            }
+        });
+
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            const deviceRadios = document.getElementsByName('device');
+            let selectedDevice = 'cpu';
+            for (const radio of deviceRadios) {
+                if (radio.checked) {
+                    selectedDevice = radio.value;
+                    break;
+                }
+            }
+
+            const modelRadios = document.getElementsByName('model');
+            let selectedModel = 'medium';
+            for (const radio of modelRadios) {
+                if (radio.checked) {
+                    selectedModel = radio.value;
+                    break;
+                }
+            }
+
+            const diarizationRadios = document.getElementsByName('diarization');
+            let selectedDiarization = 'accurate';
+            for (const radio of diarizationRadios) {
+                if (radio.checked) {
+                    selectedDiarization = radio.value;
+                    break;
+                }
+            }
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            formData.append('device', selectedDevice);
+            formData.append('model', selectedModel);
+            formData.append('diarization', selectedDiarization);
+
+            const baseTime = estimateProcessingTime(selectedFile.size);
+            let timeMultiplier = selectedDevice === 'cpu' ? 8 : 1;
+
+            if (selectedModel === 'base') {
+                timeMultiplier *= 0.3;
+            } else if (selectedModel === 'medium') {
+                timeMultiplier *= 0.6;
+            }
+
+            // Adjust estimate based on diarization method
+            let diarizationMultiplier = 1;
+            if (selectedDiarization === 'accurate') diarizationMultiplier = 1.3;
+            if (selectedDiarization === 'maximum') diarizationMultiplier = 1.8;
+
+            estimatedDuration = baseTime * timeMultiplier * diarizationMultiplier;
+
+            const deviceName = selectedDevice === 'cuda' ? 'GPU' : 'CPU';
+            const modelName = selectedModel.charAt(0).toUpperCase() + selectedModel.slice(1);
+            status.className = 'status processing show';
+            status.innerHTML = `<div class="spinner"></div>Processing on ${deviceName} with ${modelName} model... This may take a few minutes.`;
+            uploadBtn.disabled = true;
+            cancelBtn.style.display = 'inline-block';
+            transcriptContainer.classList.remove('show');
+
+            abortController = new AbortController();
+            startTimer();
+            startProgress();
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData,
+                    signal: abortController.signal
+                });
+
+                const result = await response.json();
+
+                if (result.task_id) {
+                    currentTaskId = result.task_id;
+                }
+
+                if (result.success) {
+                    completeProgress();
+                    stopTimer();
+
+                    const finalTime = timerDisplay.textContent;
+                    const deviceUsed = result.device || deviceName;
+                    const modelUsed = result.model || modelName;
+                    const diarizationLabels = { 'fast': 'Fast', 'accurate': 'Accurate', 'maximum': 'Maximum Fidelity' };
+                    const diarizationUsed = diarizationLabels[result.diarization || selectedDiarization] || 'Fast';
+                    status.className = 'status success show';
+                    status.innerHTML = `✅ Transcription complete in ${finalTime} using ${deviceUsed} with ${modelUsed} model! (Speaker detection: ${diarizationUsed})`;
+
+                    transcriptText = result.transcript;
+                    transcript.textContent = transcriptText;
+                    transcriptContainer.classList.add('show');
+
+                    // Enable AI analysis after successful transcription
+                    enableAiAnalysis();
+
+                    downloadUrl = result.download_url;
+
+                    const buttonGroup = document.querySelector('.button-group');
+                    if (!document.getElementById('downloadBtn')) {
+                        const downloadBtn = document.createElement('button');
+                        downloadBtn.id = 'downloadBtn';
+                        downloadBtn.className = 'btn download-btn tooltip';
+                        downloadBtn.setAttribute('data-tooltip', 'Download as text file');
+                        downloadBtn.innerHTML = '💾 Download';
+                        downloadBtn.onclick = () => window.location.href = downloadUrl;
+                        buttonGroup.appendChild(downloadBtn);
+                    }
+
+                    setTimeout(() => {
+                        progressContainer.classList.remove('show');
+                    }, 3000);
+                } else if (result.cancelled) {
+                    throw new Error('Transcription cancelled');
+                } else {
+                    throw new Error(result.error || 'Unknown error');
+                }
+            } catch (error) {
+                if (error.name === 'AbortError') return;
+                stopTimer();
+                resetProgress();
+                status.className = 'status error show';
+                status.innerHTML = '❌ Error: ' + error.message;
+            } finally {
+                uploadBtn.disabled = false;
+                cancelBtn.style.display = 'none';
+                abortController = null;
+                currentTaskId = null;
+            }
+        });
+
+        // ============ AI Analysis Section ============
+
+        // AI Analysis Variables
+        const aiAnalysisContainer = document.getElementById('aiAnalysisContainer');
+        const summarizeBtn = document.getElementById('summarizeBtn');
+        const insightsBtn = document.getElementById('insightsBtn');
+        const customPromptBtn = document.getElementById('customPromptBtn');
+        const customPromptInput = document.getElementById('customPrompt');
+        const aiStatus = document.getElementById('aiStatus');
+        const aiResults = document.getElementById('aiResults');
+        const aiResultsContent = document.getElementById('aiResultsContent');
+        const copyAiBtn = document.getElementById('copyAiBtn');
+        const copyAiIcon = document.getElementById('copyAiIcon');
+        const copyAiText = document.getElementById('copyAiText');
+
+        let currentAiResult = '';
+        let gpuStatusInterval = null;
+
+        // Show AI analysis section when transcript is available
+        function enableAiAnalysis() {
+            aiAnalysisContainer.classList.add('show');
+            summarizeBtn.disabled = false;
+            insightsBtn.disabled = false;
+            customPromptBtn.disabled = false;
+            customPromptInput.disabled = false;
+        }
+
+        // Disable AI analysis buttons
+        function disableAiAnalysis() {
+            summarizeBtn.disabled = true;
+            insightsBtn.disabled = true;
+            customPromptBtn.disabled = true;
+            customPromptInput.disabled = true;
+        }
+
+        // Disable transcription upload
+        function disableTranscription() {
+            uploadBtn.disabled = true;
+        }
+
+        // Enable transcription upload
+        function enableTranscription() {
+            uploadBtn.disabled = false;
+        }
+
+        // Get selected AI model
+        function getSelectedAiModel() {
+            const modelRadios = document.getElementsByName('aiModel');
+            for (const radio of modelRadios) {
+                if (radio.checked) {
+                    return radio.value;
+                }
+            }
+            return 'gemma'; // default
+        }
+
+        // Check GPU status periodically
+        function startGpuStatusPolling() {
+            if (gpuStatusInterval) return; // Already polling
+
+            gpuStatusInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/gpu-status');
+                    const status = await response.json();
+
+                    if (status.transcription_active) {
+                        disableAiAnalysis();
+                    }
+
+                    if (status.ai_analysis_active) {
+                        disableTranscription();
+                    }
+
+                    // Re-enable when both are inactive
+                    if (!status.transcription_active && !status.ai_analysis_active && transcriptText) {
+                        enableAiAnalysis();
+                        enableTranscription();
+                    }
+                } catch (error) {
+                    console.error('GPU status check failed:', error);
+                }
+            }, 2000);
+        }
+
+        function stopGpuStatusPolling() {
+            if (gpuStatusInterval) {
+                clearInterval(gpuStatusInterval);
+                gpuStatusInterval = null;
+            }
+        }
+
+        // Perform AI analysis
+        async function performAiAnalysis(analysisType, customPrompt = null) {
+            if (!transcriptText) {
+                aiStatus.className = 'status error show';
+                aiStatus.innerHTML = '❌ No transcript available for analysis';
+                return;
+            }
+
+            const aiModel = getSelectedAiModel();
+
+            disableAiAnalysis();
+            disableTranscription();
+            aiStatus.className = 'status processing show';
+            aiStatus.innerHTML = '<div class="spinner"></div>Analyzing transcript...';
+            aiResults.style.display = 'none';
+
+            try {
+                const requestData = {
+                    transcript: transcriptText,
+                    analysis_type: analysisType,
+                    ai_model: aiModel
+                };
+
+                if (customPrompt) {
+                    requestData.custom_prompt = customPrompt;
+                }
+
+                const response = await fetch('/ai-analysis', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    currentAiResult = result.analysis;
+                    aiResultsContent.textContent = currentAiResult;
+                    aiResults.style.display = 'block';
+
+                    const modelName = aiModel === 'gemma' ? 'Local Gemma3' : 'Cloud Gemini';
+                    aiStatus.className = 'status success show';
+                    aiStatus.innerHTML = `✅ Analysis complete using ${modelName}`;
+                } else {
+                    throw new Error(result.error || 'Analysis failed');
+                }
+            } catch (error) {
+                aiStatus.className = 'status error show';
+                aiStatus.innerHTML = '❌ Error: ' + error.message;
+            } finally {
+                enableAiAnalysis();
+                enableTranscription();
+            }
+        }
+
+        // Event listeners for AI buttons
+        summarizeBtn.addEventListener('click', () => {
+            performAiAnalysis('summarize');
+        });
+
+        insightsBtn.addEventListener('click', () => {
+            performAiAnalysis('insights');
+        });
+
+        customPromptBtn.addEventListener('click', () => {
+            const prompt = customPromptInput.value.trim();
+            if (!prompt) {
+                aiStatus.className = 'status error show';
+                aiStatus.innerHTML = '❌ Please enter a custom prompt';
+                return;
+            }
+            performAiAnalysis('custom', prompt);
+        });
+
+        // Copy AI results button
+        copyAiBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(currentAiResult);
+                copyAiBtn.classList.add('copied');
+                copyAiIcon.textContent = '✓';
+                copyAiText.textContent = 'Copied!';
+
+                setTimeout(() => {
+                    copyAiBtn.classList.remove('copied');
+                    copyAiIcon.textContent = '📋';
+                    copyAiText.textContent = 'Copy';
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy text: ', err);
+            }
+        });
+
+        // Start GPU status polling when page loads
+        startGpuStatusPolling();
+    </script>
+</body>
+</html>

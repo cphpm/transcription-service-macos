@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker-compose down:*)",
+      "Bash(docker-compose config:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker images:*)",
+      "Bash(docker restart:*)",
+      "Bash(curl:*)",
+      "Bash(python -m json.tool:*)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

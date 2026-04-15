@@ -1,0 +1,27 @@
+services:
+  transcription:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: transcription-service-gpu
+    ports:
+      - "8080:5000"
+    volumes:
+      - ./outputs:/app/outputs
+      - ./uploads:/app/uploads
+      - ./models:/app/models
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

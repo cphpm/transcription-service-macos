@@ -1,0 +1,69 @@
+# GPU-enabled Dockerfile (requires NVIDIA GPU + nvidia-docker)
+FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/opt/huggingface
+
+# Install Python and system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    ffmpeg \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Upgrade pip
+RUN pip3 install --upgrade pip
+
+# Install latest PyTorch with CUDA 12.4 support
+# Using --upgrade to get the latest available version
+RUN pip3 install --no-cache-dir --upgrade \
+    torch \
+    torchaudio \
+    --index-url https://download.pytorch.org/whl/cu124
+
+# Copy requirements file
+COPY requirements.txt .
+
+# Install Python packages from requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Install python-dotenv for environment variable management
+RUN pip3 install --no-cache-dir python-dotenv
+
+# Install speaker diarization packages separately (avoids pip resolution-too-deep with torch)
+ENV TORCHAUDIO_USE_BACKEND_DISPATCHER=1
+RUN pip3 install --no-cache-dir speechbrain>=1.0.0 "pyannote.audio>=4.0.0"
+
+# Pre-download models during build so they're baked into the image
+ARG HF_TOKEN
+RUN python3 -c "\
+from huggingface_hub import snapshot_download; \
+snapshot_download('Systran/faster-whisper-base'); \
+snapshot_download('Systran/faster-whisper-medium'); \
+snapshot_download('Systran/faster-whisper-large-v3')"
+
+RUN python3 -c "\
+from huggingface_hub import snapshot_download; \
+snapshot_download('speechbrain/spkrec-ecapa-voxceleb', local_dir='/opt/huggingface/speechbrain_ecapa')"
+
+RUN if [ -n "$HF_TOKEN" ]; then python3 -c "\
+import os; \
+from huggingface_hub import snapshot_download; \
+snapshot_download('pyannote/speaker-diarization-community-1', token=os.environ['HF_TOKEN'])"; \
+else echo 'HF_TOKEN not set, skipping pyannote pre-download'; fi
+
+# Create directories
+RUN mkdir -p /app/uploads /app/outputs /app/models
+
+# Copy application files
+COPY app.py .
+COPY templates templates/
+
+EXPOSE 5000
+
+CMD ["python3", "app.py"]
