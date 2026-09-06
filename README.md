@@ -14,11 +14,19 @@ Flask-based transcription service using OpenAI's Whisper model, with optional sp
 
 ## Requirements
 
-Docker is the only thing you need to install. On a Mac, either download Docker
-Desktop from docker.com or install it from the terminal:
+You need Docker and git. Nothing else, and no Python or model downloads of your
+own. On a Mac, either download Docker Desktop from docker.com or install it from
+the terminal:
 
 ```bash
 brew install --cask docker
+```
+
+git ships with the Xcode command line tools on macOS. If `git --version` reports
+it is missing, install them:
+
+```bash
+xcode-select --install
 ```
 
 Docker Desktop must be running before any of the commands below work. Launch it
@@ -34,26 +42,41 @@ running yet.
 
 ## Quick Start
 
+Clone the repository and start it:
+
 ```bash
+git clone https://github.com/cphpm/transcription-service-macos.git
+cd transcription-service-macos
 ./start.sh
 ```
 
 Then open http://localhost:8080.
+
+The repository is public, so the clone needs no GitHub account. Every command in
+this README is run from the `transcription-service-macos` directory that clone
+creates.
 
 On first run this creates `.env` from `.env.example`. The defaults are enough for
 local transcription, so there is nothing to fill in before starting. Edit `.env`
 later if you want cloud analysis or a different Ollama model, and an existing
 `.env` is never overwritten.
 
-Add `--gpu` to use an NVIDIA GPU, which needs the NVIDIA container runtime:
+Any further arguments are passed to Docker Compose, so `./start.sh -d` runs it in
+the background. You can also call Compose directly if you prefer; `.env` is
+optional there and the service falls back to its built-in defaults without it.
+
+### Using a GPU
+
+**This is for Windows or Linux machines with an NVIDIA card. It does not work on
+a Mac.** Apple machines have no NVIDIA hardware, and Docker Desktop on macOS
+cannot reach the GPU at all, so Macs always transcribe on the processor.
+
+Where the hardware is available, install the NVIDIA container runtime and add
+`--gpu`:
 
 ```bash
 ./start.sh --gpu
 ```
-
-Any further arguments are passed to Docker Compose, so `./start.sh -d` runs it in
-the background. You can also call Compose directly if you prefer; `.env` is
-optional there and the service falls back to its built-in defaults without it.
 
 ## Working with the container
 
@@ -163,10 +186,12 @@ No account and no token are needed. If speaker identification cannot run, the in
 Model weights are baked into the image at build time and no login is required to build or run. At runtime the container is set to `HF_HUB_OFFLINE` with telemetry disabled, so transcription never contacts HuggingFace or any other third party. The only outbound call the service can make is to the Gemini API, and only when you explicitly pick the cloud option for transcript analysis.
 
 ### Device Selection
-- **CPU**: Works everywhere, slower (the only option on macOS)
-- **GPU**: Considerably faster, requires an NVIDIA GPU and the GPU compose file
+- **CPU**: Works everywhere, slower. The only option on a Mac
+- **GPU**: Considerably faster. Windows or Linux only, and needs an NVIDIA card
+  plus the GPU compose file
 
-The device selector is hidden when no CUDA device is present.
+The device selector is hidden when no CUDA device is present, which is always the
+case on macOS.
 
 ## Troubleshooting
 
