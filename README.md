@@ -29,9 +29,16 @@ it is missing, install them:
 xcode-select --install
 ```
 
-Docker Desktop must be running before any of the commands below work. Launch it
-from Applications, or with `open -a Docker`, and wait for the whale icon in the
-menu bar to stop animating. Check that the daemon is up:
+On Windows, install Docker Desktop and Git for Windows from their download
+pages, or with winget:
+
+```bash
+winget install Docker.DockerDesktop Git.Git
+```
+
+Docker Desktop must be running before any of the commands below work. Start it
+from Applications on a Mac (`open -a Docker`) or the Start menu on Windows, and
+wait for the whale icon to stop animating. Check that the daemon is up:
 
 ```bash
 docker info
@@ -47,23 +54,34 @@ Clone the repository and start it:
 ```bash
 git clone https://github.com/cphpm/transcription-service-macos.git
 cd transcription-service-macos
-./start.sh
+docker compose up --build
 ```
 
 Then open http://localhost:8080.
 
-The repository is public, so the clone needs no GitHub account. Every command in
-this README is run from the `transcription-service-macos` directory that clone
-creates.
+These are the same three commands on macOS, Windows and Linux. On Windows they
+work in PowerShell, Command Prompt, Git Bash or WSL alike. The repository is
+public, so the clone needs no GitHub account, and every command in this README is
+run from the `transcription-service-macos` directory that clone creates.
 
-On first run this creates `.env` from `.env.example`. The defaults are enough for
-local transcription, so there is nothing to fill in before starting. Edit `.env`
-later if you want cloud analysis or a different Ollama model, and an existing
-`.env` is never overwritten.
+There is no configuration step. Every setting has a working default, so nothing
+needs to be created or filled in before the first run. Add `-d` to run it in the
+background.
 
-Any further arguments are passed to Docker Compose, so `./start.sh -d` runs it in
-the background. You can also call Compose directly if you prefer; `.env` is
-optional there and the service falls back to its built-in defaults without it.
+### Changing settings
+
+Only if you want to. Copy the example file and edit it:
+
+```bash
+cp .env.example .env
+```
+
+In PowerShell that one is `Copy-Item .env.example .env`. It is the only command
+in this README that differs by platform.
+
+Compose picks `.env` up automatically on the next start, and anything you leave
+out keeps its default. This is where you would put a Gemini API key, point at a
+different Ollama model, or pin the transcription language.
 
 ### Using a GPU
 
@@ -71,11 +89,11 @@ optional there and the service falls back to its built-in defaults without it.
 a Mac.** Apple machines have no NVIDIA hardware, and Docker Desktop on macOS
 cannot reach the GPU at all, so Macs always transcribe on the processor.
 
-Where the hardware is available, install the NVIDIA container runtime and add
-`--gpu`:
+Where the hardware is available, install the NVIDIA container runtime and point
+Compose at the GPU file:
 
 ```bash
-./start.sh --gpu
+docker compose -f docker-compose.gpu.yml up --build
 ```
 
 ## Working with the container
@@ -89,7 +107,7 @@ named `transcription-service`.
 
 ```bash
 # Start in the background instead of holding the terminal
-./start.sh -d
+docker compose up --build -d
 
 # Follow the log output, which is where transcription progress appears
 docker compose logs -f

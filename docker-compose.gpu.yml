@@ -10,12 +10,17 @@ services:
       - ./outputs:/app/outputs
       - ./uploads:/app/uploads
       - ./models:/app/models
-    env_file:
-      - path: .env
-        required: false
+    # Compose reads ./.env automatically for these substitutions, so a .env file
+    # overrides any of them, and the defaults apply when there is no .env at all.
     environment:
       - PYTHONUNBUFFERED=1
       - CUDA_VISIBLE_DEVICES=0
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - GEMMA_MODEL_NAME=${GEMMA_MODEL_NAME:-gemma4:e4b}
+      - OLLAMA_TIMEOUT_SECONDS=${OLLAMA_TIMEOUT_SECONDS:-600}
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-30m}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-auto}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     deploy:
       resources:
         reservations:
