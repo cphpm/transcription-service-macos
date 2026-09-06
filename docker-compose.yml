@@ -9,7 +9,8 @@ services:
       - ./uploads:/app/uploads
       - ./models:/app/models
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped

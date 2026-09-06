@@ -14,25 +14,26 @@ Flask-based transcription service using OpenAI's Whisper model, with optional sp
 
 ## Quick Start
 
-### Option 1: CPU (works everywhere)
-
-**Recommended for MacBooks.** Docker on macOS has no GPU access, so this is the only option there.
-
 ```bash
-# Build and start the service
-docker-compose up --build
-
-# Access the web interface
-open http://localhost:8080
+./start.sh
 ```
 
-### Option 2: NVIDIA GPU
+Then open http://localhost:8080.
 
-Requires an NVIDIA GPU and the NVIDIA container runtime.
+On first run this creates `.env` from `.env.example`. The defaults are enough for
+local transcription, so there is nothing to fill in before starting. Edit `.env`
+later if you want cloud analysis or a different Ollama model, and an existing
+`.env` is never overwritten.
+
+Add `--gpu` to use an NVIDIA GPU, which needs the NVIDIA container runtime:
 
 ```bash
-docker-compose -f docker-compose.gpu.yml up --build
+./start.sh --gpu
 ```
+
+Any further arguments are passed to Docker Compose, so `./start.sh -d` runs it in
+the background. You can also call Compose directly if you prefer; `.env` is
+optional there and the service falls back to its built-in defaults without it.
 
 ## Usage
 
@@ -101,8 +102,7 @@ The device selector is hidden when no CUDA device is present.
 ## Stopping the Service
 
 ```bash
-# Stop and remove containers
-docker-compose down
+docker compose down
 ```
 
 ## Troubleshooting
