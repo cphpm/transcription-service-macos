@@ -5,6 +5,7 @@ from faster_whisper import WhisperModel
 import librosa
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
+from scipy.spatial.distance import pdist
 from datetime import datetime
 import torch
 import psutil
@@ -25,9 +26,8 @@ except ImportError:
     genai = None
     types = None
 
-# Speaker diarization backends (lazy-loaded)
+# Speaker embedding backend (lazy-loaded)
 SPEECHBRAIN_AVAILABLE = False
-PYANNOTE_AVAILABLE = False
 
 # Patch torchaudio for speechbrain compatibility (list_audio_backends removed in torchaudio 2.6+)
 import torchaudio
@@ -38,13 +38,8 @@ try:
     from speechbrain.inference.speaker import EncoderClassifier
     SPEECHBRAIN_AVAILABLE = True
 except Exception as e:
-    print(f"Warning: speechbrain not available ({e}). 'Accurate' diarization will be disabled.")
+    print(f"Warning: speechbrain not available ({e}). Speaker identification will be disabled.")
 
-try:
-    from pyannote.audio import Pipeline as PyannotePipeline
-    PYANNOTE_AVAILABLE = True
-except Exception as e:
-    print(f"Warning: pyannote.audio not available ({e}). 'Maximum Fidelity' diarization will be disabled.")
 from dotenv import load_dotenv
 from flask_wtf.csrf import CSRFProtect
 from flask_limiter import Limiter
@@ -88,7 +83,7 @@ limiter = Limiter(
 # Configuration
 UPLOAD_FOLDER = '/app/uploads'
 OUTPUT_FOLDER = '/app/outputs'
-ALLOWED_EXTENSIONS = {'mp3', 'mp4', 'wav', 'avi', 'mov', 'm4a', 'flac', 'webm'}
+ALLOWED_EXTENSIONS = {'mp3', 'mp4', 'wav', 'avi', 'mov', 'm4a', 'flac', 'webm', 'mkv'}
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -108,11 +103,38 @@ gpu_lock = threading.Lock()
 
 # AI Configuration
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://ollama:11434')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-GEMMA_MODEL_NAME = os.getenv('GEMMA_MODEL_NAME', 'gemma3-4B-F16')
 
-# HuggingFace token for pyannote.audio (optional, for Maximum Fidelity diarization)
-HF_TOKEN = os.getenv('HF_TOKEN', '')
+# A cold load of a multi-gigabyte model plus generation over a long transcript
+# comfortably exceeds two minutes, which is what the old limit allowed.
+OLLAMA_TIMEOUT_SECONDS = int(os.getenv('OLLAMA_TIMEOUT_SECONDS', '600'))
+
+# Keep the model resident between analyses so only the first one pays the load.
+OLLAMA_KEEP_ALIVE = os.getenv('OLLAMA_KEEP_ALIVE', '30m')
+
+# The service runs a single Whisper model. large-v3-turbo matched large-v3
+# output in testing at roughly a quarter of the time.
+WHISPER_MODEL_NAME = 'turbo'
+
+# Weights are baked into the image at a fixed path so the container can load
+# them with no network access at all. Falls back to the model name when running
+# outside the image, where faster-whisper resolves and caches it itself.
+WHISPER_MODEL_PATH = os.getenv('WHISPER_MODEL_PATH', '/opt/whisper-large-v3-turbo')
+
+# Default transcription language. 'auto' lets Whisper detect it per file.
+DEFAULT_LANGUAGE = os.getenv('WHISPER_LANGUAGE', 'auto').strip().lower() or 'auto'
+
+
+def resolve_language(value):
+    """Map a requested language to what Whisper expects, None meaning auto."""
+    from faster_whisper.tokenizer import _LANGUAGE_CODES
+
+    code = (value or DEFAULT_LANGUAGE).strip().lower()
+    if code in ('', 'auto'):
+        return None
+    return code if code in _LANGUAGE_CODES else None
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GEMMA_MODEL_NAME = os.getenv('GEMMA_MODEL_NAME', 'gemma4:e4b')
+
 
 # Validate and initialize Gemini client
 if GEMINI_API_KEY and GENAI_AVAILABLE:
@@ -142,9 +164,8 @@ if cuda_available:
 # Format: whisper_models[device][model_name] = model
 whisper_models = {}
 
-# Speaker diarization model caches
+# Speaker embedding model cache
 speechbrain_model = None
-pyannote_pipeline = None
 
 def get_speechbrain_model(device='cpu'):
     """Lazy-load SpeechBrain ECAPA-TDNN speaker embedding model"""
@@ -157,45 +178,31 @@ def get_speechbrain_model(device='cpu'):
 
     print("Loading SpeechBrain ECAPA-TDNN model...")
     run_opts = {"device": device}
-    speechbrain_model = EncoderClassifier.from_hparams(
-        source="speechbrain/spkrec-ecapa-voxceleb",
-        savedir="/opt/huggingface/speechbrain_ecapa",
-        run_opts=run_opts
-    )
+    local_ecapa = "/opt/huggingface/speechbrain_ecapa"
+    if os.path.isdir(local_ecapa):
+        speechbrain_model = EncoderClassifier.from_hparams(
+            source=local_ecapa,
+            savedir=local_ecapa,
+            run_opts=run_opts,
+            overrides={"pretrained_path": local_ecapa},
+        )
+    else:
+        speechbrain_model = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            savedir=local_ecapa,
+            run_opts=run_opts,
+        )
     print("SpeechBrain ECAPA-TDNN model loaded")
     return speechbrain_model
 
-def get_pyannote_pipeline(device='cpu'):
-    """Lazy-load pyannote.audio diarization pipeline"""
-    global pyannote_pipeline
-    if pyannote_pipeline is not None:
-        return pyannote_pipeline
-
-    if not PYANNOTE_AVAILABLE or not HF_TOKEN:
-        return None
-
-    print("Loading pyannote.audio speaker-diarization-3.1 pipeline...")
-    pyannote_pipeline = PyannotePipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        token=HF_TOKEN
-    )
-    if device == 'cuda' and torch.cuda.is_available():
-        pyannote_pipeline.to(torch.device('cuda'))
-    print("pyannote.audio speaker-diarization-3.1 pipeline loaded")
-    return pyannote_pipeline
-
-def get_whisper_model(device_choice, model_name='base'):
-    """Get or create Whisper model for the specified device and model size"""
+def get_whisper_model(device_choice):
+    """Get or create the Whisper model for the specified device"""
     device = device_choice.lower()
-    model = model_name.lower()
+    model = WHISPER_MODEL_NAME
 
     # Validate device choice
     if device not in ['cuda', 'cpu']:
         device = 'cpu'
-
-    # Validate model choice
-    if model not in ['base', 'medium', 'large-v3']:
-        model = 'base'
     
     # If CUDA requested but not available, fall back to CPU
     if device == 'cuda' and not cuda_available:
@@ -215,12 +222,14 @@ def get_whisper_model(device_choice, model_name='base'):
     
     print(f"Loading Whisper {model} model on {device.upper()} with compute type {compute_type}")
     
+    source = WHISPER_MODEL_PATH if os.path.isdir(WHISPER_MODEL_PATH) else WHISPER_MODEL_NAME
+
     whisper = WhisperModel(
-        model,
+        source,
         device=device,
         compute_type=compute_type,
-        num_workers=8 if device == 'cpu' else 4,
-        cpu_threads=16 if device == 'cpu' else 4
+        num_workers=1,
+        cpu_threads=os.cpu_count() or 4
     )
     
     whisper_models[device][model] = whisper
@@ -238,103 +247,124 @@ def format_timestamp(seconds):
     secs = int(seconds % 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
-def extract_speaker_features(audio_path, segments):
-    """Extract audio features for each segment to identify speakers"""
-    try:
-        # Load audio with higher sample rate for better quality
-        y, sr = librosa.load(audio_path, sr=22050)  # Increased from 16000
-        
-        features_list = []
-        valid_segments = []
-        
-        for seg in segments:
-            start_sample = int(seg['start'] * sr)
-            end_sample = int(seg['end'] * sr)
-            
-            if end_sample > len(y):
-                end_sample = len(y)
-            
-            segment_audio = y[start_sample:end_sample]
-            
-            if len(segment_audio) < 1000:  # Skip very short segments
-                continue
-            
-            # Extract features with higher precision
-            # 1. Pitch (fundamental frequency)
-            pitches, magnitudes = librosa.piptrack(y=segment_audio, sr=sr, fmin=75, fmax=400)
-            pitch = np.mean(pitches[pitches > 0]) if np.any(pitches > 0) else 0
-            
-            # 2. Spectral features
-            spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=segment_audio, sr=sr))
-            spectral_rolloff = np.mean(librosa.feature.spectral_rolloff(y=segment_audio, sr=sr))
-            spectral_bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=segment_audio, sr=sr))
-            
-            # 3. MFCC (voice characteristics) - increased from 13 to 20
-            mfcc = librosa.feature.mfcc(y=segment_audio, sr=sr, n_mfcc=20)
-            mfcc_mean = np.mean(mfcc, axis=1)
-            mfcc_std = np.std(mfcc, axis=1)
-            
-            # 4. Zero crossing rate (voice texture)
-            zcr = np.mean(librosa.feature.zero_crossing_rate(segment_audio))
-            
-            # 5. Energy
-            energy = np.mean(librosa.feature.rms(y=segment_audio))
-            
-            # Combine features - more comprehensive feature set
-            features = np.concatenate([
-                [pitch * 2.0, spectral_centroid * 0.5, spectral_rolloff * 0.5, 
-                 spectral_bandwidth * 0.5, zcr, energy],
-                mfcc_mean,
-                mfcc_std
-            ])
-            
-            features_list.append(features)
-            valid_segments.append(seg)
-        
-        if len(features_list) < 2:
-            return None
-        
-        # Cluster segments by speaker (using hierarchical clustering)
-        features_array = np.array(features_list)
-        
-        # Normalize features
-        features_array = (features_array - features_array.mean(axis=0)) / (features_array.std(axis=0) + 1e-8)
-        
-        # Dynamic speaker detection based on segment count
-        n_speakers = 2  # Default
-        
-        if len(features_list) > 10:
-            # Use distance threshold for automatic speaker detection
-            clustering = AgglomerativeClustering(
-                n_clusters=None, 
-                distance_threshold=2.2,  # Slightly tighter for better separation
-                linkage='ward'
-            )
-            labels = clustering.fit_predict(features_array)
-            n_speakers = len(np.unique(labels))
-            
-            # Cap at 6 speakers maximum (reasonable for most conversations)
-            if n_speakers > 6:
-                clustering = AgglomerativeClustering(n_clusters=3, linkage='ward')
-                labels = clustering.fit_predict(features_array)
-        else:
-            clustering = AgglomerativeClustering(n_clusters=2, linkage='ward')
-            labels = clustering.fit_predict(features_array)
-        
-        # Assign speaker labels
-        for seg, label in zip(valid_segments, labels):
-            seg['speaker'] = f"Speaker {label + 1}"
-        
-        return valid_segments
-        
-    except Exception as e:
-        print(f"Feature extraction failed: {e}")
-        return None
+# Speaker clustering. Acceptance is an absolute distance between voices, not a
+# relative cluster-quality score: a single speaker's segments still form tidy
+# groups, so relative measures happily split one voice in two.
+# Identity of the speaker model, surfaced in the UI and the transcript header.
+try:
+    import importlib.metadata as _package_metadata
+    SPEAKER_LIB_VERSION = _package_metadata.version('speechbrain')
+except Exception:
+    SPEAKER_LIB_VERSION = 'unknown'
+
+SPEAKER_MODEL_LABEL = 'SpeechBrain ECAPA-TDNN'
+SPEAKER_MODEL_REPO = 'spkrec-ecapa-voxceleb'
+
+MAX_SPEAKERS = 6
+
+# Measured on ECAPA embeddings of a single speaker: pairwise cosine distance
+# peaked at 0.215. Distinct speakers normally exceed 0.6, so 0.45 sits in the gap.
+SPEAKER_DISTANCE_EMBEDDING = 0.45
+
+# Minimum audio needed for a trustworthy speaker embedding.
+MIN_EMBEDDING_SECONDS = 1.0
+
+# Clusters smaller than this are folded into the nearest one.
+MIN_CLUSTER_SEGMENTS = 2
+
+
+def choose_speaker_labels(X, metric, linkage, distance_threshold):
+    """Cluster segment representations without assuming more than one speaker.
+
+    Segments merge until no two clusters are closer than distance_threshold, so
+    audio containing one voice yields one cluster.
+    Returns (labels, n_speakers).
+    """
+    n = len(X)
+    if n < 2:
+        return np.zeros(n, dtype=int), 1
+
+    labels = AgglomerativeClustering(
+        n_clusters=None,
+        distance_threshold=distance_threshold,
+        metric=metric,
+        linkage=linkage,
+    ).fit_predict(X)
+    n_speakers = len(np.unique(labels))
+
+    spread = pdist(X, metric=metric)
+    print(f"Speaker clustering: {n_speakers} cluster(s) at {metric} threshold "
+          f"{distance_threshold}; observed distance mean={spread.mean():.3f} "
+          f"max={spread.max():.3f}")
+
+    if n_speakers > MAX_SPEAKERS:
+        labels = AgglomerativeClustering(
+            n_clusters=MAX_SPEAKERS, metric=metric, linkage=linkage
+        ).fit_predict(X)
+
+    labels = merge_small_clusters(X, labels, metric)
+    n_speakers = len(np.unique(labels))
+
+    return labels, n_speakers
+
+
+def merge_small_clusters(X, labels, metric):
+    """Fold tiny clusters into the nearest real one.
+
+    One stray segment forming its own cluster is an artefact of a short or noisy
+    utterance, not an extra person in the room.
+    """
+    unique, counts = np.unique(labels, return_counts=True)
+    keep = unique[counts >= MIN_CLUSTER_SEGMENTS]
+
+    if len(keep) == 0 or len(keep) == len(unique):
+        return relabel_consecutively(labels)
+
+    centroids = {c: X[labels == c].mean(axis=0) for c in keep}
+    merged = labels.copy()
+
+    for cluster in unique:
+        if cluster in keep:
+            continue
+        for i in np.where(labels == cluster)[0]:
+            distances = {
+                c: pdist(np.vstack([X[i], centroid]), metric=metric)[0]
+                for c, centroid in centroids.items()
+            }
+            merged[i] = min(distances, key=distances.get)
+
+    print(f"Speaker clustering: merged {len(unique) - len(keep)} undersized "
+          f"cluster(s), {len(keep)} speaker(s) remain")
+    return relabel_consecutively(merged)
+
+
+def relabel_consecutively(labels):
+    """Renumber labels so speakers come out as 1, 2, 3 with no gaps."""
+    mapping = {old: new for new, old in enumerate(np.unique(labels))}
+    return np.array([mapping[v] for v in labels])
+
+
+def apply_labels_to_segments(segments, scored_indices, labels):
+    """Label every segment, including ones too short to score.
+
+    Unscored segments inherit the nearest scored segment's speaker rather than
+    being dropped from the transcript.
+    """
+    label_by_index = dict(zip(scored_indices, labels))
+    last_label = int(labels[0]) if len(labels) else 0
+
+    for i, seg in enumerate(segments):
+        if i in label_by_index:
+            last_label = int(label_by_index[i])
+        seg['speaker'] = f"Speaker {last_label + 1}"
+
+    return segments
+
 
 def extract_speaker_embeddings(audio_path, segments, device='cpu'):
     """
     Extract neural speaker embeddings using SpeechBrain ECAPA-TDNN
-    and cluster them. Drop-in replacement for extract_speaker_features().
+    and cluster them.
     """
     try:
         import torchaudio
@@ -357,9 +387,9 @@ def extract_speaker_embeddings(audio_path, segments, device='cpu'):
             sample_rate = 16000
 
         embeddings_list = []
-        valid_segments = []
+        scored_indices = []
 
-        for seg in segments:
+        for index, seg in enumerate(segments):
             start_sample = int(seg['start'] * sample_rate)
             end_sample = int(seg['end'] * sample_rate)
 
@@ -368,110 +398,33 @@ def extract_speaker_embeddings(audio_path, segments, device='cpu'):
 
             segment_audio = waveform[:, start_sample:end_sample]
 
-            # Skip very short segments (less than 0.5 seconds)
-            if segment_audio.shape[1] < sample_rate * 0.5:
+            # Embeddings from very short audio are unreliable.
+            if segment_audio.shape[1] < sample_rate * MIN_EMBEDDING_SECONDS:
                 continue
 
             # Extract embedding (returns tensor of shape [1, 1, 192])
             with torch.no_grad():
                 embedding = model.encode_batch(segment_audio)
                 embeddings_list.append(embedding.squeeze().cpu().numpy())
-            valid_segments.append(seg)
+            scored_indices.append(index)
 
-        if len(embeddings_list) < 2:
+        if not embeddings_list:
             return None
 
-        # Cluster embeddings
-        embeddings_array = np.array(embeddings_list)
-        embeddings_array = normalize(embeddings_array)
+        if len(embeddings_list) == 1:
+            return apply_labels_to_segments(segments, scored_indices, np.zeros(1, dtype=int))
 
-        if len(embeddings_list) > 10:
-            clustering = AgglomerativeClustering(
-                n_clusters=None,
-                distance_threshold=0.5,
-                metric='cosine',
-                linkage='average'
-            )
-            labels = clustering.fit_predict(embeddings_array)
-            n_speakers = len(np.unique(labels))
+        embeddings_array = normalize(np.array(embeddings_list))
 
-            if n_speakers > 6:
-                clustering = AgglomerativeClustering(
-                    n_clusters=3, metric='cosine', linkage='average'
-                )
-                labels = clustering.fit_predict(embeddings_array)
-        else:
-            clustering = AgglomerativeClustering(
-                n_clusters=2, metric='cosine', linkage='average'
-            )
-            labels = clustering.fit_predict(embeddings_array)
+        labels, _ = choose_speaker_labels(
+            embeddings_array, metric='cosine', linkage='average',
+            distance_threshold=SPEAKER_DISTANCE_EMBEDDING
+        )
 
-        for seg, label in zip(valid_segments, labels):
-            seg['speaker'] = f"Speaker {label + 1}"
-
-        return valid_segments
+        return apply_labels_to_segments(segments, scored_indices, labels)
 
     except Exception as e:
         print(f"SpeechBrain embedding extraction failed: {e}")
-        return None
-
-def diarize_with_pyannote(audio_path, segments, device='cpu'):
-    """
-    Full neural diarization using pyannote.audio community-1 pipeline.
-    Returns segments with speaker labels assigned from pyannote output.
-    """
-    try:
-        pipeline = get_pyannote_pipeline(device)
-        if pipeline is None:
-            print("pyannote pipeline not available")
-            return None
-
-        # Run pyannote diarization on the full audio file
-        diarization = pipeline(audio_path)
-
-        # Build a list of (start, end, speaker) from pyannote output
-        pyannote_turns = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            pyannote_turns.append({
-                'start': turn.start,
-                'end': turn.end,
-                'speaker': speaker
-            })
-
-        if not pyannote_turns:
-            return None
-
-        # Create a mapping from pyannote speaker IDs to friendly names
-        unique_speakers = list(dict.fromkeys(t['speaker'] for t in pyannote_turns))
-        speaker_map = {spk: f"Speaker {i+1}" for i, spk in enumerate(unique_speakers)}
-
-        # Assign pyannote speaker labels to Whisper segments
-        # For each Whisper segment, find the pyannote speaker with most overlap
-        for seg in segments:
-            seg_start = seg['start']
-            seg_end = seg['end']
-
-            speaker_overlaps = {}
-            for turn in pyannote_turns:
-                overlap_start = max(seg_start, turn['start'])
-                overlap_end = min(seg_end, turn['end'])
-                overlap = max(0, overlap_end - overlap_start)
-
-                if overlap > 0:
-                    mapped_speaker = speaker_map[turn['speaker']]
-                    speaker_overlaps[mapped_speaker] = (
-                        speaker_overlaps.get(mapped_speaker, 0) + overlap
-                    )
-
-            if speaker_overlaps:
-                seg['speaker'] = max(speaker_overlaps, key=speaker_overlaps.get)
-            else:
-                seg['speaker'] = "Speaker 1"
-
-        return segments
-
-    except Exception as e:
-        print(f"pyannote diarization failed: {e}")
         return None
 
 def acquire_gpu(operation_type):
@@ -558,7 +511,7 @@ Insights:""",
     return prompts.get(analysis_type, prompts['summarize'])
 
 def analyze_with_ollama(transcript, prompt_template):
-    """Use local Ollama service for AI analysis with Gemma3"""
+    """Use local Ollama service for AI analysis with Gemma 4"""
     try:
         full_prompt = prompt_template.format(transcript=transcript)
 
@@ -568,13 +521,14 @@ def analyze_with_ollama(transcript, prompt_template):
                 'model': GEMMA_MODEL_NAME,
                 'prompt': full_prompt,
                 'stream': False,
+                'keep_alive': OLLAMA_KEEP_ALIVE,
                 'options': {
                     'temperature': 0.7,
                     'top_p': 0.9,
                     'num_predict': 2000
                 }
             },
-            timeout=120  # 2 minute timeout
+            timeout=OLLAMA_TIMEOUT_SECONDS
         )
 
         if response.status_code == 200:
@@ -590,9 +544,15 @@ def analyze_with_ollama(transcript, prompt_template):
             return None, error_msg
 
     except requests.exceptions.Timeout:
-        return None, "Analysis timed out. The model might still be loading."
+        return None, (
+            f"{GEMMA_MODEL_NAME} did not answer within {OLLAMA_TIMEOUT_SECONDS} seconds. "
+            "Long transcripts on a large model can take a while; try again now that the "
+            "model is loaded, or raise OLLAMA_TIMEOUT_SECONDS in .env."
+        )
     except requests.exceptions.ConnectionError:
-        return None, f"Cannot connect to Ollama service at {OLLAMA_BASE_URL}. Ensure Ollama is running."
+        return None, (
+            f"Cannot reach Ollama at {OLLAMA_BASE_URL}. Start Ollama and reload this page."
+        )
     except Exception as e:
         return None, f"Ollama analysis failed: {str(e)}"
 
@@ -652,8 +612,20 @@ def perform_ai_analysis(transcript, analysis_type, ai_model='gemma', custom_prom
     else:  # default to gemma/ollama
         return analyze_with_ollama(transcript, prompt_template)
 
-def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=None, diarization_method='accurate'):
-    """Transcribe audio and identify speakers"""
+def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=None,
+                             diarization_method='on', language=None):
+    """Transcribe audio and identify speakers.
+
+    Returns (segments, report) where report records which diarization method
+    actually ran and why, so a silent downgrade cannot be mistaken for success.
+    """
+    report = {
+        'requested': diarization_method,
+        'used': diarization_method,
+        'degraded': False,
+        'warnings': [],
+        'speakers': 0,
+    }
 
     # Store thread reference for potential cleanup
     current_thread = None
@@ -688,14 +660,14 @@ def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=Non
             segments, info = whisper_model.transcribe(
                 audio_path,
                 beam_size=beam_size,
-                language="en",
+                language=language,
                 vad_filter=True,
                 vad_parameters=dict(
                     min_speech_duration_ms=250,
                     min_silence_duration_ms=500
                 ),
                 word_timestamps=False,
-                condition_on_previous_text=True
+                condition_on_previous_text=False
             )
             
             # Convert generator to list (this allows us to check cancellation)
@@ -769,29 +741,30 @@ def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=Non
         print(f"Task {task_id} cancelled before speaker detection")
         raise TranscriptionCancelled("Task cancelled by user")
     
-    # Step 2: Speaker identification using selected method
-    print(f"Identifying speakers using '{diarization_method}' method...")
+    # Step 2: Speaker identification, on or off
+    if diarization_method != 'on':
+        print("Speaker identification is off")
+        for seg in transcription:
+            seg['speaker'] = None
+        report['used'] = 'off'
+        report['speakers'] = 0
+        return transcription, report
 
-    # Free GPU memory before neural diarization if on CUDA
-    if device_name == 'cuda' and diarization_method in ('accurate', 'maximum'):
+    print(f"Identifying speakers with {SPEAKER_MODEL_LABEL}...")
+
+    if device_name == 'cuda':
         torch.cuda.empty_cache()
 
     result = None
 
-    if diarization_method == 'maximum' and PYANNOTE_AVAILABLE and HF_TOKEN:
-        result = diarize_with_pyannote(audio_path, transcription, device_name)
-        if result is None:
-            print("pyannote failed, falling back to 'accurate' method")
-            diarization_method = 'accurate'
-
-    if diarization_method == 'accurate' and SPEECHBRAIN_AVAILABLE:
+    if not SPEECHBRAIN_AVAILABLE:
+        report['warnings'].append(f"{SPEAKER_MODEL_LABEL} is not installed")
+    else:
         result = extract_speaker_embeddings(audio_path, transcription, device_name)
         if result is None:
-            print("SpeechBrain failed, falling back to 'fast' method")
-            diarization_method = 'fast'
+            report['warnings'].append(f"{SPEAKER_MODEL_LABEL} could not process this audio")
 
-    if diarization_method == 'fast' or result is None:
-        result = extract_speaker_features(audio_path, transcription)
+    report['degraded'] = bool(report['warnings'])
 
     if is_cancelled():
         print(f"Task {task_id} cancelled after speaker detection")
@@ -799,25 +772,80 @@ def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=Non
 
     if result:
         transcription = result
-        unique_speakers = len(set([seg['speaker'] for seg in transcription]))
-        print(f"Identified {unique_speakers} unique speakers using '{diarization_method}' method")
+        report['speakers'] = len(set(seg['speaker'] for seg in transcription))
+        print(f"Identified {report['speakers']} speaker(s) with {SPEAKER_MODEL_LABEL}")
     else:
-        # Fallback: Simple detection based on pauses
-        print("Using fallback speaker detection (pause-based)")
-        current_speaker = 1
-        last_end = 0
-
+        # No method produced a result. Label everything as one speaker rather
+        # than inventing speakers from pause lengths, and say so.
         for seg in transcription:
-            if seg['start'] - last_end > 1.5:
-                current_speaker = (current_speaker % 3) + 1
-            seg['speaker'] = f"Speaker {current_speaker}"
-            last_end = seg['end']
+            seg['speaker'] = None
+        report['used'] = 'failed'
+        report['degraded'] = True
+        report['speakers'] = 0
+        report['warnings'].append("Speaker identification failed, so the transcript has no speaker labels")
+        print("Speaker identification failed, transcript has no speaker labels")
 
-    return transcription
+    return transcription, report
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', gemma_model=GEMMA_MODEL_NAME,
+                           speaker_model=SPEAKER_MODEL_LABEL,
+                           speaker_checkpoint=SPEAKER_MODEL_REPO,
+                           speaker_version=SPEAKER_LIB_VERSION)
+
+# Browser tab icon: a glass tile carrying the same microphone the page uses.
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Transcription Service">
+  <defs>
+    <linearGradient id="tile" x1="0.1" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#4A3A87"/>
+      <stop offset="0.5" stop-color="#251A47"/>
+      <stop offset="1" stop-color="#120C22"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="0.5" cy="0.46" r="0.5">
+      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#8B5CF6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0.05" y1="0" x2="0.7" y2="0.85">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.26"/>
+      <stop offset="0.38" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="glyph" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#F3EEFF"/>
+      <stop offset="1" stop-color="#C4ADFF"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.04"/>
+    </linearGradient>
+    <filter id="lift" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="1.4" stdDeviation="1.8" flood-color="#0B0716" flood-opacity="0.75"/>
+    </filter>
+  </defs>
+
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#tile)"/>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bloom)"/>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#sheen)"/>
+  <rect x="2.9" y="2.9" width="58.2" height="58.2" rx="15.1" fill="none" stroke="url(#rim)" stroke-width="1.8"/>
+
+  <g filter="url(#lift)">
+    <rect x="25.5" y="11" width="13" height="25" rx="6.5" fill="url(#glyph)"/>
+    <g stroke="url(#glyph)" fill="none" stroke-linecap="round" stroke-width="5">
+      <path d="M19 30.5a13 13 0 0 0 26 0"/>
+      <path d="M32 44.5V52"/>
+    </g>
+  </g>
+</svg>"""
+
+
+@app.route('/favicon.svg')
+def favicon_svg():
+    response = app.response_class(FAVICON_SVG, mimetype='image/svg+xml')
+    response.headers['Cache-Control'] = 'public, max-age=86400'
+    return response
 
 @app.route('/upload', methods=['POST'])
 @limiter.limit("10 per hour")
@@ -846,20 +874,10 @@ def upload_file():
         device_choice = 'cpu'
     
     # Get model selection from form
-    model_choice = request.form.get('model', 'base').lower()
-    if model_choice not in ['base', 'medium', 'large-v3']:
-        model_choice = 'base'
+    language_choice = resolve_language(request.form.get('language'))
 
-    # Get diarization method from form
-    diarization_choice = request.form.get('diarization', 'accurate').lower()
-    if diarization_choice not in ['fast', 'accurate', 'maximum']:
-        diarization_choice = 'accurate'
-
-    # Validate diarization method availability (fall back if needed)
-    if diarization_choice == 'maximum' and (not PYANNOTE_AVAILABLE or not HF_TOKEN):
-        diarization_choice = 'accurate'
-    if diarization_choice == 'accurate' and not SPEECHBRAIN_AVAILABLE:
-        diarization_choice = 'fast'
+    # Speaker identification is a simple on/off choice.
+    diarization_choice = 'off' if request.form.get('diarization', 'on').lower() == 'off' else 'on'
 
     # Generate unique task ID
     task_id = str(uuid.uuid4())
@@ -880,7 +898,7 @@ def upload_file():
 
         try:
             # Get appropriate model
-            model, actual_device, actual_model = get_whisper_model(device_choice, model_choice)
+            model, actual_device, actual_model = get_whisper_model(device_choice)
 
             # Save uploaded file with secure filename
             safe_original_name = secure_filename(file.filename)
@@ -888,10 +906,13 @@ def upload_file():
             filepath = os.path.join(UPLOAD_FOLDER, filename)
             file.save(filepath)
 
-            print(f"Processing file: {filename} on {actual_device.upper()} with {actual_model} model, diarization: {diarization_choice} (Task: {task_id})")
+            print(f"Processing file: {filename} on {actual_device.upper()} with {actual_model} model, "
+                  f"language: {language_choice or 'auto'}, diarization: {diarization_choice} (Task: {task_id})")
 
-            # Transcribe with task ID and diarization method
-            transcription = transcribe_with_speakers(filepath, model, actual_device, task_id, diarization_choice)
+            # Transcribe with task ID, diarization method and language
+            transcription, speaker_report = transcribe_with_speakers(
+                filepath, model, actual_device, task_id, diarization_choice, language_choice
+            )
 
             # Format output
             output_text = []
@@ -899,12 +920,21 @@ def upload_file():
             output_text.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             output_text.append(f"Device: {actual_device.upper()}\n")
             output_text.append(f"Model: {actual_model}\n")
-            output_text.append(f"Diarization: {diarization_choice}\n")
+            output_text.append(f"Language: {language_choice or 'auto-detected'}\n")
+            if speaker_report['used'] == 'on':
+                output_text.append(f"Speakers: {SPEAKER_MODEL_LABEL} "
+                                   f"({SPEAKER_MODEL_REPO}, speechbrain {SPEAKER_LIB_VERSION})\n")
+            else:
+                output_text.append("Speakers: not identified\n")
+            for warning in speaker_report['warnings']:
+                output_text.append(f"Warning: {warning}\n")
             output_text.append("=" * 80 + "\n\n")
 
             for seg in transcription:
                 timestamp = f"[{format_timestamp(seg['start'])} - {format_timestamp(seg['end'])}]"
-                output_text.append(f"{timestamp} {seg['speaker']}: {seg['text']}\n")
+                speaker = seg.get('speaker')
+                prefix = f"{timestamp} {speaker}:" if speaker else timestamp
+                output_text.append(f"{prefix} {seg['text']}\n")
 
             # Save transcript
             output_filename = filename.rsplit('.', 1)[0] + '_transcript.txt'
@@ -928,7 +958,13 @@ def upload_file():
                 'download_url': f'/download/{output_filename}',
                 'device': actual_device.upper(),
                 'model': actual_model,
-                'diarization': diarization_choice,
+                'language': language_choice or 'auto',
+                'diarization': speaker_report['used'],
+                'diarization_requested': speaker_report['requested'],
+                'speaker_model': f"{SPEAKER_MODEL_LABEL} ({SPEAKER_MODEL_REPO}, speechbrain {SPEAKER_LIB_VERSION})",
+                'diarization_degraded': speaker_report['degraded'],
+                'diarization_warnings': speaker_report['warnings'],
+                'speakers': speaker_report['speakers'],
                 'task_id': task_id
             })
         finally:
@@ -1037,7 +1073,7 @@ def ai_analysis():
         # Check if Gemini is requested but not available
         if ai_model == 'gemini' and not GEMINI_API_KEY:
             return jsonify({
-                'error': 'Gemini API key not configured. Please set GEMINI_API_KEY environment variable or use Local Gemma3.'
+                'error': 'Gemini API key not configured. Please set GEMINI_API_KEY environment variable or use Local Gemma 4.'
             }), 400
 
         # Acquire GPU lock before starting AI analysis
@@ -1118,7 +1154,8 @@ def health():
         health_info = {
             'status': 'healthy',
             'cuda_available': cuda_available,
-            'available_models': ['base', 'medium', 'large-v3'],
+            'whisper_model': WHISPER_MODEL_NAME,
+            'default_language': DEFAULT_LANGUAGE,
             'loaded_models': loaded_models_info,
             'system_ram': ram_display
         }
@@ -1134,14 +1171,17 @@ def health():
             health_info['gpu_vram'] = None
 
         # Diarization backends availability
-        health_info['diarization'] = {
-            'fast': True,
-            'accurate': SPEECHBRAIN_AVAILABLE,
-            'maximum': PYANNOTE_AVAILABLE and bool(HF_TOKEN)
+        health_info['speaker_identification'] = {
+            'available': SPEECHBRAIN_AVAILABLE,
+            'model': SPEAKER_MODEL_LABEL,
+            'checkpoint': SPEAKER_MODEL_REPO,
+            'library_version': SPEAKER_LIB_VERSION,
         }
 
         # Check AI services availability
         health_info['ai_services'] = {
+            'ollama_model_available': False,
+            'ollama_url': OLLAMA_BASE_URL,
             'ollama_available': False,
             'gemini_available': bool(GEMINI_API_KEY),
             'gemma_model': GEMMA_MODEL_NAME
@@ -1153,9 +1193,16 @@ def health():
             if ollama_response.status_code == 200:
                 health_info['ai_services']['ollama_available'] = True
                 models_data = ollama_response.json()
-                health_info['ai_services']['ollama_models'] = [
-                    model.get('name') for model in models_data.get('models', [])
-                ]
+                names = [m.get('name') for m in models_data.get('models', []) if m.get('name')]
+                health_info['ai_services']['ollama_models'] = names
+
+                # Ollama reports tags with an implicit ':latest' sometimes.
+                def normalise(tag):
+                    return tag if ':' in tag else f"{tag}:latest"
+
+                health_info['ai_services']['ollama_model_available'] = (
+                    normalise(GEMMA_MODEL_NAME) in {normalise(n) for n in names}
+                )
         except:
             pass
         

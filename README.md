@@ -4,13 +4,13 @@ Flask-based transcription service using OpenAI's Whisper model with automatic sp
 
 ## Features
 
-- 🎙️ **Multi-format support**: MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM
+- 🎙️ **Multi-format support**: MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM, MKV
 - 👥 **Speaker diarization**: Automatic detection of 2-6 speakers
 - 🚀 **Flexible processing**: CPU
-- 🎯 **Multiple models**: Base (fast), Medium (balanced), Large-v3 (accurate)
+- 🎯 **Fixed transcription model**: Whisper large-v3-turbo, matched large-v3 output in testing at about a quarter of the time
 - 🌐 **Web interface**: Drag-and-drop file upload with progress tracking
 - ⚡ **Real-time progress**: Live updates with cancellation support
-- 🎙️ **AI transcript processing**: Use either Gemini API key or Ollama for a local model
+- 🎙️ **AI transcript processing**: Local Gemma 4 (`gemma4:e4b`) via Ollama, or the cloud Gemini API
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ open http://localhost:8080
 ## Usage
 
 1. Open http://localhost:8080 in your browser
-2. Select processing device (CPU) and model size (Base/Medium/Large)
+2. Select processing device (CPU), language (auto-detect by default), and whether to identify speakers
 3. Upload or drag-and-drop an audio/video file
 4. Click "Transcribe" and wait for processing
 5. View, copy, or download the transcript
@@ -46,7 +46,7 @@ Transcripts are saved in `./outputs/` with timestamps and speaker labels:
 ## Supported File Formats
 
 - **Audio**: MP3, WAV, M4A, FLAC
-- **Video**: MP4, AVI, MOV, WebM
+- **Video**: MP4, AVI, MOV, WebM, MKV
 
 ## API Endpoints
 
@@ -59,9 +59,18 @@ Transcripts are saved in `./outputs/` with timestamps and speaker labels:
 ## Configuration
 
 ### Model Selection
-- **Base**: Fastest, good for simple conversations
-- **Medium**: Balanced speed and accuracy (default)
-- **Large-v3**: Highest accuracy, slower
+Transcription always runs Whisper large-v3-turbo. There is no model choice to make.
+
+### Language
+Auto-detect by default. Pick a language in the interface when the audio is short or noisy, since detection is less reliable there. `WHISPER_LANGUAGE` in `.env` sets the starting value.
+
+### Speaker identification
+On or off. On labels each line with a speaker using SpeechBrain ECAPA-TDNN embeddings (`spkrec-ecapa-voxceleb`), clustered with a distance threshold calibrated against known single- and two-speaker audio. Off produces a plain timestamped transcript and runs faster.
+
+No account and no token are needed. If speaker identification cannot run, the interface says so and the transcript comes back without labels rather than with invented ones.
+
+### Privacy
+Model weights are baked into the image at build time and no login is required to build or run. At runtime the container is set to `HF_HUB_OFFLINE` with telemetry disabled, so transcription never contacts HuggingFace or any other third party. The only outbound call the service can make is to the Gemini API, and only when you explicitly pick the cloud option for transcript analysis.
 
 ### Device Selection
 - **CPU**: Works everywhere, slower (recommended for MacBooks)
@@ -79,7 +88,7 @@ docker-compose down
 ### Slow transcription on Mac
 - This is normal - Macs use CPU processing
 - **Tips**:
-  - Use "Base" model for faster results
+  - Name the language instead of leaving it on auto
   - Consider using smaller file chunks
   - Expect ~1-2 minutes per minute of audio on CPU
 
@@ -90,8 +99,36 @@ docker-compose down
     - "8081:5000"  # Use 8081 instead of 8080
   ```
 
-## AI transcription processing
-If you want to use AI for processing the transcript, you can use Cloud (Gemini) or Ollama locally. You'll need to respectively configure Gemini API key and or Ollama in .env
+## AI transcript processing
+
+Summaries and other analysis of a finished transcript can run either locally or in the cloud. Pick the model in the "AI Model Selection" card in the web interface.
+
+### Local Gemma 4 (default)
+
+Runs on your own machine through [Ollama](https://ollama.com), so the transcript never leaves it.
+
+```bash
+ollama pull gemma4:e4b
+```
+
+Then set both values in `.env`:
+
+```
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+GEMMA_MODEL_NAME=gemma4:e4b
+```
+
+`host.docker.internal` reaches an Ollama installed on the host from inside the container. Use `http://localhost:11434` when running the app outside Docker. To use a different local model, pull it and change `GEMMA_MODEL_NAME` to its Ollama tag.
+
+### Cloud Gemini
+
+Set `GEMINI_API_KEY` in `.env` with a key from https://aistudio.google.com/app/apikey.
+
+Either option is greyed out in the interface when it cannot run, with a note saying what to configure. If Ollama is running but lacks the configured model, the note gives you the `ollama pull` command.
+
+Analysis waits up to `OLLAMA_TIMEOUT_SECONDS` (600 by default). For scale, a cold model load costs roughly 35 seconds and a 45-minute transcript takes about 90 seconds more. `OLLAMA_KEEP_ALIVE` holds the model in memory so only the first analysis pays the load.
+
+`GET /health` reports whether Ollama is reachable and which models it has available.
 
 ## License
 

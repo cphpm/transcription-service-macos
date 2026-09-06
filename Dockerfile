@@ -19,7 +19,7 @@ WORKDIR /app
 # Upgrade pip
 RUN pip3 install --upgrade pip
 
-# Install PyTorch CPU version (pinned to 2.8.0 to satisfy pyannote.audio>=4.0.0 floor constraint)
+# Install PyTorch CPU version (2.8.0 matches what speechbrain 1.1.x expects)
 RUN pip3 install --no-cache-dir \
     torch==2.8.0 \
     torchaudio==2.8.0 \
@@ -29,28 +29,29 @@ RUN pip3 install --no-cache-dir \
 COPY requirements-docker.txt .
 RUN pip3 install --no-cache-dir -r requirements-docker.txt
 
-# Install speaker diarization packages (pyannote.audio 3.x uses soundfile, not torchcodec — ARM64 compatible)
-RUN pip3 install --no-cache-dir "pyannote.audio==3.3.2" && \
-    pip3 install --no-cache-dir "speechbrain==1.0.3"
+# Speaker embeddings. speechbrain 1.1.x is the first line compatible with
+# huggingface_hub 1.x, and its model is ungated: no account, no token.
+RUN pip3 install --no-cache-dir "speechbrain==1.1.1"
 
 # Pre-download models during build so they're baked into the image
-ARG HF_TOKEN
+# large-v3-turbo has no Systran conversion; faster-whisper itself resolves the
+# 'turbo' name to this repo. Pinned by commit so the baked weights cannot change.
 RUN python3 -c "\
 from huggingface_hub import snapshot_download; \
-snapshot_download('Systran/faster-whisper-base'); \
-snapshot_download('Systran/faster-whisper-medium'); \
-snapshot_download('Systran/faster-whisper-large-v3')"
+snapshot_download('mobiuslabsgmbh/faster-whisper-large-v3-turbo', \
+                  revision='0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf', \
+                  local_dir='/opt/whisper-large-v3-turbo')"
 
 RUN python3 -c "\
 from huggingface_hub import snapshot_download; \
 snapshot_download('speechbrain/spkrec-ecapa-voxceleb', local_dir='/opt/huggingface/speechbrain_ecapa')"
 
-RUN if [ -n "$HF_TOKEN" ]; then python3 -c "\
-import os, sys, traceback; \
-from huggingface_hub import snapshot_download; \
-try: snapshot_download('pyannote/speaker-diarization-3.1', token=os.environ['HF_TOKEN']); \
-except Exception as e: print('ERROR:', e, flush=True); traceback.print_exc(); sys.exit(1)"; \
-else echo 'HF_TOKEN not set, skipping pyannote pre-download'; fi
+# All weights are baked in above. Block any further contact with HuggingFace so
+# nothing about what gets transcribed leaves this machine at runtime.
+ENV HF_HUB_OFFLINE=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
+ENV HF_HUB_DISABLE_IMPLICIT_TOKEN=1
+ENV DISABLE_TELEMETRY=1
 
 # Create directories
 RUN mkdir -p /app/uploads /app/outputs /app/models

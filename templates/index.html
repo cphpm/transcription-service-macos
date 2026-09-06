@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audio/Video Transcription with Speaker Detection</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <style>
         /*
          * Dark Charcoal Theme - Sophisticated & Professional
@@ -173,17 +174,121 @@
             display: none;
         }
 
+        /* ----- Drop zone once a file is chosen ----- */
+        .upload-selected {
+            display: none;
+            align-items: center;
+            gap: 16px;
+            text-align: left;
+            position: relative;
+            z-index: 1;
+        }
+
+        .upload-area.has-file {
+            padding: 20px 24px;
+            border-style: solid;
+            border-color: var(--color-primary);
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(20, 184, 166, 0.08) 100%);
+        }
+
+        .upload-area.has-file .upload-idle {
+            display: none;
+        }
+
+        .upload-area.has-file .upload-selected {
+            display: flex;
+        }
+
+        /* The hover ripple is for the empty state only. */
+        .upload-area.has-file:hover::before {
+            width: 0;
+            height: 0;
+        }
+
+        .upload-area.has-file:hover {
+            border-color: var(--color-primary-light);
+        }
+
+        .upload-selected-icon {
+            font-size: 1.9em;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .upload-selected-body {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .upload-selected-label {
+            color: var(--color-accent-teal);
+            font-size: 0.8em;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .upload-selected-name {
+            color: var(--color-text-primary);
+            font-size: 1.15em;
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .upload-selected-meta {
+            color: var(--color-text-secondary);
+            font-size: 0.9em;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .upload-change-btn {
+            padding: 8px 16px;
+            border: 1px solid var(--color-border);
+            border-radius: 8px;
+            background: var(--color-bg-secondary);
+            color: var(--color-text-secondary);
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: all 0.2s ease;
+        }
+
+        .upload-change-btn:hover {
+            border-color: var(--color-primary);
+            color: var(--color-text-primary);
+        }
+
+        @media (max-width: 600px) {
+            .upload-selected {
+                flex-wrap: wrap;
+                row-gap: 12px;
+            }
+
+            .upload-selected-body {
+                flex: 1 1 180px;
+            }
+
+            .upload-change-btn {
+                margin-left: auto;
+            }
+        }
+
         /* Selectors */
         .selector-card {
-            margin-top: 24px;
-            padding: 24px;
+            margin-top: 16px;
+            padding: 16px 18px;
             background: var(--color-bg-tertiary);
             border-radius: 12px;
             border: 1px solid var(--color-border);
         }
 
         .selector-card h4 {
-            margin: 0 0 16px 0;
+            margin: 0 0 12px 0;
             color: var(--color-text-primary);
             font-size: 1em;
             font-weight: 600;
@@ -195,10 +300,46 @@
             font-size: 0.85em;
         }
 
+        .language-select {
+            width: 100%;
+            padding: 11px 14px;
+            background: var(--color-bg-secondary);
+            border: 2px solid var(--color-border);
+            border-radius: 8px;
+            color: var(--color-text-primary);
+            font-size: 0.95em;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .language-select:focus {
+            outline: none;
+            border-color: var(--color-primary);
+        }
+
+        .selector-note {
+            margin: 8px 0 0;
+            color: var(--color-text-tertiary);
+            font-size: 0.82em;
+        }
+
+        .engine-note {
+            margin: 8px 0 0;
+            color: rgba(255, 255, 255, 0.75);
+            font-size: 0.85em;
+        }
+
+        .status .status-warning {
+            display: block;
+            margin-top: 6px;
+            font-size: 0.9em;
+            opacity: 0.95;
+        }
+
         .options-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 10px;
         }
 
         .option {
@@ -214,14 +355,16 @@
 
         .option-label {
             display: flex;
-            flex-direction: column;
-            padding: 16px;
+            flex-direction: row;
+            align-items: center;
+            gap: 12px;
+            padding: 11px 14px;
             background: var(--color-bg-secondary);
             border: 2px solid var(--color-border);
             border-radius: 8px;
             cursor: pointer;
             transition: all 0.2s ease;
-            text-align: center;
+            text-align: left;
             height: 100%;
         }
 
@@ -248,15 +391,19 @@
         }
 
         .option-icon {
-            font-size: 2em;
-            margin-bottom: 8px;
+            font-size: 1.55em;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .option-text {
+            min-width: 0;
         }
 
         .option-name {
             font-weight: 600;
             color: var(--color-text-primary);
-            margin-bottom: 4px;
-            font-size: 1em;
+            font-size: 0.95em;
         }
 
         .option input[type="radio"]:checked + .option-label .option-name {
@@ -264,15 +411,15 @@
         }
 
         .option-description {
-            font-size: 0.85em;
+            font-size: 0.8em;
             color: var(--color-text-secondary);
-            margin-bottom: 4px;
+            margin-top: 1px;
         }
 
         .option-speed {
-            font-size: 0.8em;
+            font-size: 0.78em;
             font-weight: 600;
-            margin-top: 4px;
+            margin-top: 2px;
         }
 
         /* File Info */
@@ -360,17 +507,6 @@
             transform: none;
         }
 
-        .download-btn {
-            background: linear-gradient(135deg, var(--color-accent-teal) 0%, #0D9488 100%);
-            box-shadow: 0 4px 12px rgba(20, 184, 166, 0.3);
-            margin-left: 8px;
-        }
-
-        .download-btn:hover {
-            box-shadow: 0 6px 20px rgba(20, 184, 166, 0.4);
-            transform: translateY(-2px);
-        }
-
         .cancel-btn {
             background: linear-gradient(135deg, var(--color-accent-pink) 0%, #DB2777 100%);
             box-shadow: 0 4px 12px rgba(236, 72, 153, 0.3);
@@ -414,6 +550,12 @@
             background: rgba(16, 185, 129, 0.15);
             color: #6EE7B7;
             border-left-color: var(--color-success);
+        }
+
+        .status.warning {
+            background: rgba(245, 158, 11, 0.15);
+            color: #FCD34D;
+            border-left-color: var(--color-warning);
         }
 
         .status.error {
@@ -566,6 +708,12 @@
             margin: 0;
             font-size: 1.1em;
             font-weight: 600;
+        }
+
+        .copy-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
         }
 
         .copy-btn {
@@ -805,11 +953,130 @@
         .ai-results-content {
             padding: 32px;
             color: var(--color-text-secondary);
-            line-height: 1.8;
+            line-height: 1.75;
             font-size: 0.95em;
-            white-space: pre-wrap;
+            overflow-wrap: break-word;
             max-height: 500px;
             overflow-y: auto;
+        }
+
+        /* ----- Rendered markdown inside the analysis pane ----- */
+        .ai-results-content > *:first-child { margin-top: 0; }
+        .ai-results-content > *:last-child { margin-bottom: 0; }
+
+        .ai-results-content p {
+            margin: 0 0 14px;
+        }
+
+        .ai-results-content h1,
+        .ai-results-content h2,
+        .ai-results-content h3,
+        .ai-results-content h4,
+        .ai-results-content h5,
+        .ai-results-content h6 {
+            margin: 26px 0 10px;
+            color: var(--color-text-primary);
+            font-weight: 600;
+            line-height: 1.35;
+        }
+
+        .ai-results-content h1 { font-size: 1.35em; }
+        .ai-results-content h2 { font-size: 1.2em; }
+        .ai-results-content h3 { font-size: 1.08em; }
+        .ai-results-content h4,
+        .ai-results-content h5,
+        .ai-results-content h6 { font-size: 1em; }
+
+        .ai-results-content strong {
+            color: var(--color-text-primary);
+            font-weight: 600;
+        }
+
+        .ai-results-content em { font-style: italic; }
+
+        .ai-results-content ul,
+        .ai-results-content ol {
+            margin: 0 0 14px;
+            padding-left: 22px;
+        }
+
+        .ai-results-content li { margin-bottom: 6px; }
+        .ai-results-content li::marker { color: var(--color-primary-light); }
+
+        .ai-results-content li > ul,
+        .ai-results-content li > ol {
+            margin: 6px 0 0;
+        }
+
+        .ai-results-content code.md-inline-code {
+            padding: 1px 6px;
+            border: 1px solid var(--color-border);
+            border-radius: 4px;
+            background: var(--color-bg-tertiary);
+            color: var(--color-primary-light);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.88em;
+        }
+
+        .ai-results-content pre.md-code {
+            margin: 0 0 16px;
+            padding: 14px 16px;
+            border: 1px solid var(--color-border);
+            border-left: 3px solid var(--color-primary);
+            border-radius: 8px;
+            background: var(--color-bg-primary);
+            overflow-x: auto;
+        }
+
+        .ai-results-content pre.md-code code {
+            color: var(--color-text-primary);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.86em;
+            line-height: 1.6;
+            white-space: pre;
+        }
+
+        .ai-results-content blockquote {
+            margin: 0 0 16px;
+            padding: 4px 0 4px 16px;
+            border-left: 3px solid var(--color-primary);
+            color: var(--color-text-tertiary);
+        }
+
+        .ai-results-content a {
+            color: var(--color-primary-light);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        .ai-results-content hr {
+            margin: 22px 0;
+            border: none;
+            border-top: 1px solid var(--color-border);
+        }
+
+        .ai-results-content .md-table-wrap {
+            margin: 0 0 16px;
+            overflow-x: auto;
+        }
+
+        .ai-results-content table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.92em;
+        }
+
+        .ai-results-content th,
+        .ai-results-content td {
+            padding: 8px 12px;
+            border: 1px solid var(--color-border);
+            text-align: left;
+        }
+
+        .ai-results-content th {
+            background: var(--color-bg-tertiary);
+            color: var(--color-text-primary);
+            font-weight: 600;
         }
 
         .ai-results-content::-webkit-scrollbar {
@@ -1055,7 +1322,8 @@
     <div class="container">
         <div class="header">
             <h1>🎙️ Transcription Service</h1>
-            <p>Upload audio or video files for automatic transcription with speaker identification</p>
+            <p>Upload audio or video files for automatic transcription with experimental speaker identification</p>
+            <p class="engine-note">Transcribed locally with Whisper (large-v3-turbo)</p>
         </div>
 
         <div class="content">
@@ -1069,10 +1337,21 @@
             <!-- Upload panel (default) -->
             <div class="upload-panel" id="uploadPanel">
                 <div class="upload-area" id="uploadArea">
-                    <div class="upload-icon">📁</div>
-                    <div class="upload-text">Click to upload or drag and drop</div>
-                    <div class="upload-subtext">Supports MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM</div>
-                    <input type="file" id="fileInput" accept="audio/*,video/*">
+                    <div class="upload-idle">
+                        <div class="upload-icon">📁</div>
+                        <div class="upload-text">Click to upload or drag and drop</div>
+                        <div class="upload-subtext">Supports MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM, MKV</div>
+                    </div>
+                    <div class="upload-selected">
+                        <div class="upload-selected-icon">✅</div>
+                        <div class="upload-selected-body">
+                            <div class="upload-selected-label" id="uploadSelectedLabel">File ready to transcribe</div>
+                            <div class="upload-selected-name" id="uploadSelectedName"></div>
+                        </div>
+                        <div class="upload-selected-meta" id="uploadSelectedMeta"></div>
+                        <button type="button" class="upload-change-btn" id="uploadChangeBtn">Change</button>
+                    </div>
+                    <input type="file" id="fileInput" accept="audio/*,video/*,.mkv">
                 </div>
             </div>
 
@@ -1124,16 +1403,20 @@
                         <input type="radio" id="deviceGPU" name="device" value="cuda">
                         <label for="deviceGPU" class="option-label">
                             <div class="option-icon">🚀</div>
-                            <div class="option-name">NVIDIA GPU</div>
-                            <div class="option-speed" style="color: var(--color-accent-teal);">⚡ Very Fast</div>
+                            <div class="option-text">
+                                <div class="option-name">NVIDIA GPU</div>
+                                <div class="option-speed" style="color: var(--color-accent-teal);">⚡ Very Fast</div>
+                            </div>
                         </label>
                     </div>
                     <div class="option">
                         <input type="radio" id="deviceCPU" name="device" value="cpu" checked>
                         <label for="deviceCPU" class="option-label">
                             <div class="option-icon">🖥️</div>
-                            <div class="option-name">CPU</div>
-                            <div class="option-speed" style="color: var(--color-text-tertiary);">🐢 Slower (universal)</div>
+                            <div class="option-text">
+                                <div class="option-name">CPU</div>
+                                <div class="option-speed" style="color: var(--color-text-tertiary);">🐢 Slower (universal)</div>
+                            </div>
                         </label>
                     </div>
                 </div>
@@ -1141,68 +1424,64 @@
 
             <div class="selector-card">
                 <h4>
-                    <span>🤖</span>
-                    <span>Whisper Model</span>
+                    <span>🗣️</span>
+                    <span>Language</span>
                 </h4>
-                <div class="options-grid">
-                    <div class="option">
-                        <input type="radio" id="modelBase" name="model" value="base" checked>
-                        <label for="modelBase" class="option-label">
-                            <div class="option-icon">⚡</div>
-                            <div class="option-name">Base</div>
-                            <div class="option-speed" style="color: var(--color-accent-teal);">🚀 Fastest</div>
-                        </label>
-                    </div>
-                    <div class="option">
-                        <input type="radio" id="modelMedium" name="model" value="medium">
-                        <label for="modelMedium" class="option-label">
-                            <div class="option-icon">⚖️</div>
-                            <div class="option-name">Medium</div>
-                            <div class="option-speed" style="color: var(--color-warning);">⭐ Balanced</div>
-                        </label>
-                    </div>
-                    <div class="option">
-                        <input type="radio" id="modelLarge" name="model" value="large-v3">
-                        <label for="modelLarge" class="option-label">
-                            <div class="option-icon">🎯</div>
-                            <div class="option-name">Large-v3</div>
-                            <div class="option-speed" style="color: var(--color-accent-pink);">💎 Best Accuracy</div>
-                        </label>
-                    </div>
-                </div>
+                <select id="languageSelect" class="language-select">
+                    <option value="auto" selected>Auto detect</option>
+                    <option value="en">English</option>
+                    <option value="da">Danish</option>
+                    <option value="sv">Swedish</option>
+                    <option value="no">Norwegian</option>
+                    <option value="de">German</option>
+                    <option value="nl">Dutch</option>
+                    <option value="fr">French</option>
+                    <option value="es">Spanish</option>
+                    <option value="it">Italian</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="pl">Polish</option>
+                    <option value="fi">Finnish</option>
+                    <option value="uk">Ukrainian</option>
+                    <option value="ru">Russian</option>
+                    <option value="ar">Arabic</option>
+                    <option value="hi">Hindi</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="zh">Chinese</option>
+                </select>
+                <p class="selector-note">Naming the language is more reliable than auto detection on short or noisy audio.</p>
             </div>
 
             <div class="selector-card" id="diarizationSelectorCard">
                 <h4>
                     <span>👥</span>
-                    <span>Speaker Detection</span>
+                    <span>Speaker Identification</span>
                 </h4>
                 <div class="options-grid">
                     <div class="option">
-                        <input type="radio" id="diarizeFast" name="diarization" value="fast">
-                        <label for="diarizeFast" class="option-label">
-                            <div class="option-icon">⚡</div>
-                            <div class="option-name">Fast</div>
-                            <div class="option-speed" style="color: var(--color-accent-teal);">🚀 Fastest</div>
+                        <input type="radio" id="diarizeOff" name="diarization" value="off" checked>
+                        <label for="diarizeOff" class="option-label">
+                            <div class="option-icon">📄</div>
+                            <div class="option-text">
+                                <div class="option-name">Off</div>
+                                <div class="option-description">Transcript only</div>
+                                <div class="option-speed" style="color: var(--color-text-tertiary);">Faster</div>
+                            </div>
                         </label>
                     </div>
                     <div class="option">
-                        <input type="radio" id="diarizeAccurate" name="diarization" value="accurate" checked>
-                        <label for="diarizeAccurate" class="option-label">
-                            <div class="option-icon">🧠</div>
-                            <div class="option-name">Accurate</div>
-                            <div class="option-speed" style="color: var(--color-warning);">⭐ Neural Embeddings</div>
-                        </label>
-                    </div>
-                    <div class="option" id="diarizeMaxOption" style="display: none;">
-                        <input type="radio" id="diarizeMaximum" name="diarization" value="maximum">
-                        <label for="diarizeMaximum" class="option-label">
-                            <div class="option-icon">🎯</div>
-                            <div class="option-name">Maximum Fidelity</div>
-                            <div class="option-speed" style="color: var(--color-accent-pink);">💎 Best (pyannote)</div>
+                        <input type="radio" id="diarizeOn" name="diarization" value="on">
+                        <label for="diarizeOn" class="option-label">
+                            <div class="option-icon">🗣️</div>
+                            <div class="option-text">
+                                <div class="option-name">On</div>
+                                <div class="option-description">Labels who is speaking</div>
+                                <div class="option-speed" style="color: var(--color-accent-teal);">Slower</div>
+                            </div>
                         </label>
                     </div>
                 </div>
+                <p class="selector-note">On uses {{ speaker_model }} ({{ speaker_checkpoint }}), speechbrain {{ speaker_version }}, running locally.</p>
             </div>
 
             <div class="file-info" id="fileInfo">
@@ -1253,10 +1532,14 @@
             <div class="transcript-container" id="transcriptContainer">
                 <div class="transcript-header">
                     <h3>📝 Transcript</h3>
-                    <button class="copy-btn tooltip" id="copyBtn" data-tooltip="Copy to clipboard">
-                        <span id="copyIcon">📋</span>
-                        <span id="copyText">Copy</span>
-                    </button>
+                    <div class="copy-group">
+                        <button class="copy-btn tooltip" id="copyPlainBtn" data-tooltip="Plain text, exactly as shown">
+                            📋 Copy text
+                        </button>
+                        <button class="copy-btn tooltip" id="downloadTextBtn" data-tooltip="Save the transcript as a .txt file">
+                            💾 Download text
+                        </button>
+                    </div>
                 </div>
                 <div class="transcript" id="transcript"></div>
             </div>
@@ -1278,21 +1561,26 @@
                             <input type="radio" id="aiModelGemma" name="aiModel" value="gemma" checked>
                             <label for="aiModelGemma" class="option-label">
                                 <div class="option-icon">🏠</div>
-                                <div class="option-name">Local Gemma3</div>
-                                <div class="option-description">via Ollama</div>
-                                <div class="option-speed" style="color: var(--color-accent-teal);">🔒 Private</div>
+                                <div class="option-text">
+                                    <div class="option-name">Local {{ gemma_model }}</div>
+                                    <div class="option-description">via Ollama</div>
+                                    <div class="option-speed" style="color: var(--color-accent-teal);">🔒 Private</div>
+                                </div>
                             </label>
                         </div>
                         <div class="option">
                             <input type="radio" id="aiModelGemini" name="aiModel" value="gemini">
                             <label for="aiModelGemini" class="option-label">
                                 <div class="option-icon">☁️</div>
-                                <div class="option-name">Cloud Gemini</div>
-                                <div class="option-description">via Google API</div>
-                                <div class="option-speed" style="color: var(--color-accent-pink);">⚡ Faster</div>
+                                <div class="option-text">
+                                    <div class="option-name">Cloud Gemini</div>
+                                    <div class="option-description">via Google API</div>
+                                    <div class="option-speed" style="color: var(--color-accent-pink);">⚡ Faster</div>
+                                </div>
                             </label>
                         </div>
                     </div>
+                    <p class="selector-note" id="aiModelNote" hidden></p>
                 </div>
 
                 <!-- Analysis Actions -->
@@ -1329,10 +1617,17 @@
                 <div class="ai-results" id="aiResults" style="display: none;">
                     <div class="ai-results-header">
                         <h4>📊 Analysis Results</h4>
-                        <button class="copy-btn tooltip" id="copyAiBtn" data-tooltip="Copy analysis">
-                            <span id="copyAiIcon">📋</span>
-                            <span id="copyAiText">Copy</span>
-                        </button>
+                        <div class="copy-group">
+                            <button class="copy-btn tooltip" id="copyAiPlainBtn" data-tooltip="Plain text, no markup">
+                                📋 Copy plain text
+                            </button>
+                            <button class="copy-btn tooltip" id="copyAiMarkdownBtn" data-tooltip="Markdown source">
+                                #️⃣ Copy markdown
+                            </button>
+                            <button class="copy-btn tooltip" id="copyAiRichBtn" data-tooltip="Formatted, keeps layout in Word and Apple Notes">
+                                ✨ Copy formatted
+                            </button>
+                        </div>
                     </div>
                     <div class="ai-results-content" id="aiResultsContent"></div>
                 </div>
@@ -1349,9 +1644,6 @@
         const status = document.getElementById('status');
         const transcriptContainer = document.getElementById('transcriptContainer');
         const transcript = document.getElementById('transcript');
-        const copyBtn = document.getElementById('copyBtn');
-        const copyIcon = document.getElementById('copyIcon');
-        const copyText = document.getElementById('copyText');
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
         const progressPercentage = document.getElementById('progressPercentage');
@@ -1421,6 +1713,7 @@
                 if (selectedFile && selectedFile.name && selectedFile.name.startsWith('recording_')) {
                     selectedFile = null;
                     fileInfo.classList.remove('show');
+                    clearFileSelection();
                 }
                 // Stop any in-progress recording
                 if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
@@ -1433,6 +1726,7 @@
                 if (selectedFile && !(selectedFile.name && selectedFile.name.startsWith('recording_'))) {
                     selectedFile = null;
                     fileInfo.classList.remove('show');
+                    clearFileSelection();
                     fileInput.value = '';
                 }
             }
@@ -1662,6 +1956,7 @@
             sourceBadge.textContent = '🎙️ Recording';
             sourceBadge.className = 'source-badge badge-mic';
             fileInfo.classList.add('show');
+            markFileSelected(recFile, 'Recording ready to transcribe');
             status.classList.remove('show');
             transcriptContainer.classList.remove('show');
             resetProgress();
@@ -1689,6 +1984,7 @@
             if (selectedFile && selectedFile.name && selectedFile.name.startsWith('recording_')) {
                 selectedFile = null;
                 fileInfo.classList.remove('show');
+                clearFileSelection();
             }
         });
 
@@ -1722,24 +2018,64 @@
                     }
                 }
 
-                // Diarization method availability
-                if (data.diarization) {
-                    const diarizeAccurate = document.getElementById('diarizeAccurate');
-                    const diarizeMaxOption = document.getElementById('diarizeMaxOption');
-
-                    if (!data.diarization.accurate) {
-                        diarizeAccurate.disabled = true;
-                        // Fall back to Fast if Accurate is unavailable
-                        document.getElementById('diarizeFast').checked = true;
-                    }
-                    if (data.diarization.maximum) {
-                        // Only show Maximum Fidelity when pyannote + HF_TOKEN are configured
-                        diarizeMaxOption.style.display = '';
-                    }
+                if (data.speaker_identification && !data.speaker_identification.available) {
+                    const speakerOn = document.getElementById('diarizeOn');
+                    if (speakerOn) speakerOn.disabled = true;
                 }
+
+                applyAiAvailability(data.ai_services || {});
             } catch (error) {
                 console.error('Failed to fetch system info:', error);
             }
+        }
+
+        // Disable an analysis backend that cannot run, and say why, rather than
+        // letting the user pick it and hit an error later.
+        function applyAiAvailability(ai) {
+            const localInput = document.getElementById('aiModelGemma');
+            const cloudInput = document.getElementById('aiModelGemini');
+            const note = document.getElementById('aiModelNote');
+            const model = ai.gemma_model || 'the local model';
+            const reasons = [];
+
+            const localReady = !!ai.ollama_available && !!ai.ollama_model_available;
+            if (!localReady) {
+                localInput.disabled = true;
+                if (!ai.ollama_available) {
+                    reasons.push(`Local ${model} is unavailable: Ollama is not reachable at `
+                        + `${ai.ollama_url || 'its configured address'}. Start Ollama, then reload this page.`);
+                } else {
+                    reasons.push(`Local ${model} is unavailable: Ollama is running but does not have `
+                        + `that model. Run "ollama pull ${model}", then reload this page.`);
+                }
+            }
+
+            const cloudReady = !!ai.gemini_available;
+            if (!cloudReady) {
+                cloudInput.disabled = true;
+                reasons.push('Cloud Gemini is unavailable: set GEMINI_API_KEY in your .env file '
+                    + 'and restart the service.');
+            }
+
+            // Keep the selection on something that can actually run.
+            if (localInput.checked && !localReady && cloudReady) cloudInput.checked = true;
+            if (cloudInput.checked && !cloudReady && localReady) localInput.checked = true;
+
+            aiBackendAvailable = localReady || cloudReady;
+            if (!aiBackendAvailable) {
+                localInput.checked = false;
+                cloudInput.checked = false;
+                reasons.push('Transcript analysis is switched off until one of them is configured.');
+            }
+
+            if (reasons.length) {
+                note.textContent = reasons.join(' ');
+                note.hidden = false;
+            } else {
+                note.hidden = true;
+            }
+
+            if (!aiBackendAvailable) disableAiAnalysis();
         }
 
         window.addEventListener('DOMContentLoaded', loadSystemInfo);
@@ -1876,7 +2212,45 @@
             });
         }
 
+        const uploadChangeBtn = document.getElementById('uploadChangeBtn');
+        const uploadSelectedName = document.getElementById('uploadSelectedName');
+        const uploadSelectedMeta = document.getElementById('uploadSelectedMeta');
+        const uploadSelectedLabel = document.getElementById('uploadSelectedLabel');
+
+        function formatFileSize(bytes) {
+            if (typeof bytes !== 'number' || isNaN(bytes)) return '';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let value = bytes;
+            let unit = 0;
+            while (value >= 1024 && unit < units.length - 1) {
+                value /= 1024;
+                unit++;
+            }
+            return (unit === 0 ? value : value.toFixed(1)) + ' ' + units[unit];
+        }
+
+        // Show the selection in the drop zone itself, so it is visible without
+        // scrolling down to the file-info bar.
+        function markFileSelected(file, label) {
+            if (!file) return;
+            uploadSelectedName.textContent = file.name;
+            uploadSelectedMeta.textContent = formatFileSize(file.size);
+            uploadSelectedLabel.textContent = label || 'File ready to transcribe';
+            uploadArea.classList.add('has-file');
+        }
+
+        function clearFileSelection() {
+            uploadArea.classList.remove('has-file');
+            uploadSelectedName.textContent = '';
+            uploadSelectedMeta.textContent = '';
+        }
+
         uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadChangeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            fileInput.click();
+        });
 
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
@@ -1885,6 +2259,7 @@
                 sourceBadge.textContent = '📁 File';
                 sourceBadge.className = 'source-badge badge-file';
                 fileInfo.classList.add('show');
+                markFileSelected(selectedFile, 'File ready to transcribe');
                 status.classList.remove('show');
                 transcriptContainer.classList.remove('show');
                 resetProgress();
@@ -1912,6 +2287,7 @@
                 sourceBadge.textContent = '📁 File';
                 sourceBadge.className = 'source-badge badge-file';
                 fileInfo.classList.add('show');
+                markFileSelected(selectedFile, 'File ready to transcribe');
                 status.classList.remove('show');
                 transcriptContainer.classList.remove('show');
                 resetProgress();
@@ -1920,43 +2296,99 @@
             }
         });
 
-        copyBtn.addEventListener('click', async () => {
+        function flashCopied(button) {
+            const original = button.innerHTML;
+            button.classList.add('copied');
+            button.innerHTML = '✓ Copied!';
+            setTimeout(() => {
+                button.classList.remove('copied');
+                button.innerHTML = original;
+            }, 2000);
+        }
+
+        function copyViaSelection(html) {
+            // Fallback for browsers without ClipboardItem: a live selection of
+            // rendered HTML still copies as rich text.
+            const holder = document.createElement('div');
+            holder.innerHTML = html;
+            holder.setAttribute('contenteditable', 'true');
+            holder.style.position = 'fixed';
+            holder.style.left = '-9999px';
+            document.body.appendChild(holder);
+
+            const range = document.createRange();
+            range.selectNodeContents(holder);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            let ok = false;
             try {
-                await navigator.clipboard.writeText(transcriptText);
-                copyBtn.classList.add('copied');
-                copyIcon.textContent = '✓';
-                copyText.textContent = 'Copied!';
-
-                setTimeout(() => {
-                    copyBtn.classList.remove('copied');
-                    copyIcon.textContent = '📋';
-                    copyText.textContent = 'Copy';
-                }, 2000);
+                ok = document.execCommand('copy');
             } catch (err) {
-                console.error('Failed to copy text: ', err);
-                const textArea = document.createElement('textarea');
-                textArea.value = transcriptText;
-                textArea.style.position = 'fixed';
-                textArea.style.opacity = '0';
-                document.body.appendChild(textArea);
-                textArea.select();
+                ok = false;
+            }
 
-                try {
-                    document.execCommand('copy');
-                    copyBtn.classList.add('copied');
-                    copyIcon.textContent = '✓';
-                    copyText.textContent = 'Copied!';
+            selection.removeAllRanges();
+            document.body.removeChild(holder);
+            return ok;
+        }
 
-                    setTimeout(() => {
-                        copyBtn.classList.remove('copied');
-                        copyIcon.textContent = '📋';
-                        copyText.textContent = 'Copy';
-                    }, 2000);
-                } catch (err) {
-                    alert('Failed to copy text. Please copy manually.');
+        async function copyPlainText(text, button) {
+            try {
+                await navigator.clipboard.writeText(text);
+                flashCopied(button);
+            } catch (err) {
+                const area = document.createElement('textarea');
+                area.value = text;
+                area.style.position = 'fixed';
+                area.style.opacity = '0';
+                document.body.appendChild(area);
+                area.select();
+                const ok = document.execCommand('copy');
+                document.body.removeChild(area);
+                if (ok) {
+                    flashCopied(button);
+                } else {
+                    alert('Could not copy. Please select the transcript and copy manually.');
                 }
+            }
+        }
 
-                document.body.removeChild(textArea);
+        document.getElementById('copyPlainBtn').addEventListener('click', () => {
+            copyPlainText(transcriptText, document.getElementById('copyPlainBtn'));
+        });
+
+        // Word and Apple Notes read the clipboard's text/html flavour; the plain
+        // flavour is what everything else receives.
+        async function copyRichHtml(html, plain, button) {
+            if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+                try {
+                    await navigator.clipboard.write([
+                        new ClipboardItem({
+                            'text/html': new Blob([html], { type: 'text/html' }),
+                            'text/plain': new Blob([plain], { type: 'text/plain' })
+                        })
+                    ]);
+                    flashCopied(button);
+                    return;
+                } catch (err) {
+                    console.warn('Rich clipboard write failed, falling back', err);
+                }
+            }
+
+            if (copyViaSelection(html)) {
+                flashCopied(button);
+            } else {
+                alert('Could not copy formatted text. Try the Text button instead.');
+            }
+        }
+
+        document.getElementById('downloadTextBtn').addEventListener('click', () => {
+            if (downloadUrl) {
+                window.location.href = downloadUrl;
+            } else {
+                alert('No transcript file is available yet.');
             }
         });
 
@@ -1972,17 +2404,8 @@
                 }
             }
 
-            const modelRadios = document.getElementsByName('model');
-            let selectedModel = 'medium';
-            for (const radio of modelRadios) {
-                if (radio.checked) {
-                    selectedModel = radio.value;
-                    break;
-                }
-            }
-
             const diarizationRadios = document.getElementsByName('diarization');
-            let selectedDiarization = 'accurate';
+            let selectedDiarization = 'off';
             for (const radio of diarizationRadios) {
                 if (radio.checked) {
                     selectedDiarization = radio.value;
@@ -1993,29 +2416,24 @@
             const formData = new FormData();
             formData.append('file', selectedFile);
             formData.append('device', selectedDevice);
-            formData.append('model', selectedModel);
+            formData.append('language', document.getElementById('languageSelect').value);
             formData.append('diarization', selectedDiarization);
 
             const baseTime = estimateProcessingTime(selectedFile.size);
             let timeMultiplier = selectedDevice === 'cpu' ? 8 : 1;
 
-            if (selectedModel === 'base') {
-                timeMultiplier *= 0.3;
-            } else if (selectedModel === 'medium') {
-                timeMultiplier *= 0.6;
-            }
+            // Measured for large-v3-turbo on a 63s clip.
+            timeMultiplier *= 0.23;
 
             // Adjust estimate based on diarization method
-            let diarizationMultiplier = 1;
-            if (selectedDiarization === 'accurate') diarizationMultiplier = 1.3;
-            if (selectedDiarization === 'maximum') diarizationMultiplier = 1.8;
+            const diarizationMultiplier = selectedDiarization === 'on' ? 1.3 : 1;
 
             estimatedDuration = baseTime * timeMultiplier * diarizationMultiplier;
 
             const deviceName = selectedDevice === 'cuda' ? 'GPU' : 'CPU';
-            const modelName = selectedModel.charAt(0).toUpperCase() + selectedModel.slice(1);
+            const modelName = 'Whisper (large-v3-turbo)';
             status.className = 'status processing show';
-            status.innerHTML = `<div class="spinner"></div>Processing on ${deviceName} with ${modelName} model... This may take a few minutes.`;
+            status.innerHTML = `<div class="spinner"></div>Processing on ${deviceName} with ${modelName}... This may take a few minutes.`;
             uploadBtn.disabled = true;
             cancelBtn.style.display = 'inline-block';
             transcriptContainer.classList.remove('show');
@@ -2043,11 +2461,29 @@
 
                     const finalTime = timerDisplay.textContent;
                     const deviceUsed = result.device || deviceName;
-                    const modelUsed = result.model || modelName;
-                    const diarizationLabels = { 'fast': 'Fast', 'accurate': 'Accurate', 'maximum': 'Maximum Fidelity' };
-                    const diarizationUsed = diarizationLabels[result.diarization || selectedDiarization] || 'Fast';
-                    status.className = 'status success show';
-                    status.innerHTML = `✅ Transcription complete in ${finalTime} using ${deviceUsed} with ${modelUsed} model! (Speaker detection: ${diarizationUsed})`;
+                    const modelUsed = modelName;
+                    let speakerSummary;
+                    if (result.diarization === 'on') {
+                        const n = result.speakers || 0;
+                        speakerSummary = `${n} speaker${n === 1 ? '' : 's'} identified`;
+                    } else if (result.diarization === 'failed') {
+                        speakerSummary = 'speaker identification failed';
+                    } else {
+                        speakerSummary = 'speaker identification off';
+                    }
+
+                    let statusHtml = `✅ Transcription complete in ${finalTime} using ${deviceUsed} `
+                        + `with ${modelUsed}, ${speakerSummary}.`;
+
+                    // Never let a failure pass as a normal result.
+                    if (result.diarization_degraded) {
+                        const reasons = (result.diarization_warnings || []).join('. ');
+                        statusHtml += `<span class="status-warning">⚠️ ${reasons || 'Speaker identification did not complete'}.</span>`;
+                        status.className = 'status warning show';
+                    } else {
+                        status.className = 'status success show';
+                    }
+                    status.innerHTML = statusHtml;
 
                     transcriptText = result.transcript;
                     transcript.textContent = transcriptText;
@@ -2057,17 +2493,6 @@
                     enableAiAnalysis();
 
                     downloadUrl = result.download_url;
-
-                    const buttonGroup = document.querySelector('.button-group');
-                    if (!document.getElementById('downloadBtn')) {
-                        const downloadBtn = document.createElement('button');
-                        downloadBtn.id = 'downloadBtn';
-                        downloadBtn.className = 'btn download-btn tooltip';
-                        downloadBtn.setAttribute('data-tooltip', 'Download as text file');
-                        downloadBtn.innerHTML = '💾 Download';
-                        downloadBtn.onclick = () => window.location.href = downloadUrl;
-                        buttonGroup.appendChild(downloadBtn);
-                    }
 
                     setTimeout(() => {
                         progressContainer.classList.remove('show');
@@ -2102,16 +2527,20 @@
         const aiStatus = document.getElementById('aiStatus');
         const aiResults = document.getElementById('aiResults');
         const aiResultsContent = document.getElementById('aiResultsContent');
-        const copyAiBtn = document.getElementById('copyAiBtn');
-        const copyAiIcon = document.getElementById('copyAiIcon');
-        const copyAiText = document.getElementById('copyAiText');
 
         let currentAiResult = '';
         let gpuStatusInterval = null;
 
+        // Set from /health: false when neither analysis backend can run.
+        let aiBackendAvailable = true;
+
         // Show AI analysis section when transcript is available
         function enableAiAnalysis() {
             aiAnalysisContainer.classList.add('show');
+            if (!aiBackendAvailable) {
+                disableAiAnalysis();
+                return;
+            }
             summarizeBtn.disabled = false;
             insightsBtn.disabled = false;
             customPromptBtn.disabled = false;
@@ -2137,6 +2566,203 @@
         }
 
         // Get selected AI model
+        // Minimal markdown renderer for AI analysis output.
+        // Everything is HTML-escaped before any tag is emitted, so model output
+        // cannot inject markup into the page.
+        const MD_SENTINEL = '\uE000';
+
+        function renderMarkdown(src) {
+            function escapeHtml(value) {
+                return value
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;');
+            }
+
+            // Stash fenced code blocks before escaping so their bodies stay literal.
+            const fences = [];
+            let text = src.replace(/\r\n?/g, '\n');
+            text = text.replace(/```[^\n`]*\n([\s\S]*?)```/g, function (match, body) {
+                fences.push('<pre class="md-code"><code>' + escapeHtml(body.replace(/\n$/, '')) + '</code></pre>');
+                return MD_SENTINEL + 'FENCE' + (fences.length - 1) + MD_SENTINEL;
+            });
+
+            text = escapeHtml(text);
+
+            function inline(value) {
+                const codes = [];
+                let result = value.replace(/`([^`]+)`/g, function (match, body) {
+                    codes.push('<code class="md-inline-code">' + body + '</code>');
+                    return MD_SENTINEL + 'CODE' + (codes.length - 1) + MD_SENTINEL;
+                });
+
+                result = result
+                    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+                    .replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\*)/g, '$1<em>$2</em>')
+                    .replace(/(^|[^_\w])_([^_\n]+?)_(?!_)/g, '$1<em>$2</em>')
+                    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+                        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+                return result.replace(new RegExp(MD_SENTINEL + 'CODE(\\d+)' + MD_SENTINEL, 'g'), function (match, index) {
+                    return codes[Number(index)];
+                });
+            }
+
+            const lines = text.split('\n');
+            const out = [];
+            const listStack = [];
+            let paragraph = [];
+            let quote = [];
+
+            function flushParagraph() {
+                if (paragraph.length) {
+                    out.push('<p>' + inline(paragraph.join(' ')) + '</p>');
+                    paragraph = [];
+                }
+            }
+
+            function flushQuote() {
+                if (quote.length) {
+                    out.push('<blockquote>' + inline(quote.join(' ')) + '</blockquote>');
+                    quote = [];
+                }
+            }
+
+            function closeLists() {
+                while (listStack.length) {
+                    out.push('</li></' + listStack.pop().tag + '>');
+                }
+            }
+
+            function flushBlocks() {
+                flushParagraph();
+                flushQuote();
+                closeLists();
+            }
+
+            const fencePattern = new RegExp('^' + MD_SENTINEL + 'FENCE(\\d+)' + MD_SENTINEL + '$');
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+
+                const fence = line.match(fencePattern);
+                if (fence) {
+                    flushBlocks();
+                    out.push(fences[Number(fence[1])]);
+                    continue;
+                }
+
+                if (!line.trim()) {
+                    flushParagraph();
+                    flushQuote();
+                    continue;
+                }
+
+                const heading = line.match(/^(#{1,6})\s+(.*)$/);
+                if (heading) {
+                    flushBlocks();
+                    const level = heading[1].length;
+                    out.push('<h' + level + '>' + inline(heading[2].trim()) + '</h' + level + '>');
+                    continue;
+                }
+
+                if (/^\s*([*_-])\s*\1\s*\1[\s*_-]*$/.test(line)) {
+                    flushBlocks();
+                    out.push('<hr>');
+                    continue;
+                }
+
+                const quoted = line.match(/^\s*&gt;\s?(.*)$/);
+                if (quoted) {
+                    flushParagraph();
+                    closeLists();
+                    quote.push(quoted[1]);
+                    continue;
+                }
+
+                // Pipe table: a header row followed by a dashed separator row.
+                if (line.indexOf('|') !== -1 && i + 1 < lines.length &&
+                    lines[i + 1].indexOf('-') !== -1 && lines[i + 1].indexOf('|') !== -1 &&
+                    /^[\s:|-]+$/.test(lines[i + 1])) {
+                    flushBlocks();
+                    const splitRow = function (row) {
+                        return row.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(function (cell) {
+                            return cell.trim();
+                        });
+                    };
+                    const aligns = splitRow(lines[i + 1]).map(function (spec) {
+                        if (/^:-+:$/.test(spec)) return ' style="text-align:center"';
+                        if (/^-+:$/.test(spec)) return ' style="text-align:right"';
+                        return '';
+                    });
+                    const header = splitRow(line);
+                    const rows = [];
+                    let cursor = i + 2;
+                    while (cursor < lines.length && lines[cursor].trim() && lines[cursor].indexOf('|') !== -1) {
+                        rows.push(splitRow(lines[cursor]));
+                        cursor++;
+                    }
+                    const table = ['<div class="md-table-wrap"><table><thead><tr>'];
+                    header.forEach(function (cell, index) {
+                        table.push('<th' + (aligns[index] || '') + '>' + inline(cell) + '</th>');
+                    });
+                    table.push('</tr></thead><tbody>');
+                    rows.forEach(function (row) {
+                        table.push('<tr>');
+                        row.forEach(function (cell, index) {
+                            table.push('<td' + (aligns[index] || '') + '>' + inline(cell) + '</td>');
+                        });
+                        table.push('</tr>');
+                    });
+                    table.push('</tbody></table></div>');
+                    out.push(table.join(''));
+                    i = cursor - 1;
+                    continue;
+                }
+
+                const item = line.match(/^(\s*)([*+-]|\d+[.)])\s+(.*)$/);
+                if (item) {
+                    flushParagraph();
+                    flushQuote();
+                    const indent = item[1].replace(/\t/g, '    ').length;
+                    const tag = /^\d/.test(item[2]) ? 'ol' : 'ul';
+
+                    while (listStack.length && indent < listStack[listStack.length - 1].indent) {
+                        out.push('</li></' + listStack.pop().tag + '>');
+                    }
+
+                    const top = listStack[listStack.length - 1];
+                    if (!top || indent > top.indent) {
+                        listStack.push({ tag: tag, indent: indent });
+                        out.push('<' + tag + '><li>');
+                    } else if (top.tag !== tag) {
+                        out.push('</li></' + listStack.pop().tag + '>');
+                        listStack.push({ tag: tag, indent: indent });
+                        out.push('<' + tag + '><li>');
+                    } else {
+                        out.push('</li><li>');
+                    }
+
+                    out.push(inline(item[3]));
+                    continue;
+                }
+
+                // Wrapped continuation of the current list item.
+                if (listStack.length && /^\s/.test(line)) {
+                    out.push(' ' + inline(line.trim()));
+                    continue;
+                }
+
+                closeLists();
+                paragraph.push(line.trim());
+            }
+
+            flushBlocks();
+            return out.join('');
+        }
+
         function getSelectedAiModel() {
             const modelRadios = document.getElementsByName('aiModel');
             for (const radio of modelRadios) {
@@ -2221,10 +2847,10 @@
 
                 if (result.success) {
                     currentAiResult = result.analysis;
-                    aiResultsContent.textContent = currentAiResult;
+                    aiResultsContent.innerHTML = renderMarkdown(currentAiResult);
                     aiResults.style.display = 'block';
 
-                    const modelName = aiModel === 'gemma' ? 'Local Gemma3' : 'Cloud Gemini';
+                    const modelName = aiModel === 'gemma' ? 'Local {{ gemma_model }}' : 'Cloud Gemini';
                     aiStatus.className = 'status success show';
                     aiStatus.innerHTML = `✅ Analysis complete using ${modelName}`;
                 } else {
@@ -2259,21 +2885,88 @@
         });
 
         // Copy AI results button
-        copyAiBtn.addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(currentAiResult);
-                copyAiBtn.classList.add('copied');
-                copyAiIcon.textContent = '✓';
-                copyAiText.textContent = 'Copied!';
+        // ---- Analysis copying ---------------------------------------------
+        // The model returns markdown, so plain text means stripping the markup
+        // while keeping the line structure.
+        function analysisAsPlainText(markdown) {
+            return markdown
+                .replace(/\r\n?/g, '\n')
+                .replace(/```[^\n]*\n([\s\S]*?)```/g, '$1')
+                .replace(/`([^`]+)`/g, '$1')
+                .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
+                .replace(/\*\*([^*]+)\*\*/g, '$1')
+                .replace(/__([^_]+)__/g, '$1')
+                .replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\*)/g, '$1$2')
+                .replace(/(^|[^_\w])_([^_\n]+?)_(?!_)/g, '$1$2')
+                .replace(/^([ \t]*)[-*+][ \t]+/gm, '$1\u2022 ')
+                .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 ($2)')
+                .replace(/^[ \t]*>[ \t]?/gm, '')
+                // Pipe tables: drop the separator row, then space the cells out.
+                // These classes must exclude newlines, or a match runs past its line.
+                .replace(/^[ \t]*\|?[ \t:|-]*-[ \t:|-]*\|?[ \t]*$/gm, '')
+                .replace(/^[ \t]*\|(.+?)\|?[ \t]*$/gm, (match, row) =>
+                    row.split('|').map(cell => cell.trim()).filter(Boolean).join('\t'))
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+        }
 
-                setTimeout(() => {
-                    copyAiBtn.classList.remove('copied');
-                    copyAiIcon.textContent = '📋';
-                    copyAiText.textContent = 'Copy';
-                }, 2000);
-            } catch (err) {
-                console.error('Failed to copy text: ', err);
-            }
+        // Re-render the markdown, then inline every style, since a pasted
+        // fragment cannot reach this page's stylesheet.
+        function analysisAsRichHtml(markdown) {
+            const holder = document.createElement('div');
+            holder.innerHTML = renderMarkdown(markdown);
+
+            const styles = {
+                H1: 'margin:0 0 6pt;font-size:16pt;font-weight:600;',
+                H2: 'margin:12pt 0 6pt;font-size:14pt;font-weight:600;',
+                H3: 'margin:12pt 0 4pt;font-size:12pt;font-weight:600;',
+                H4: 'margin:10pt 0 4pt;font-size:11pt;font-weight:600;',
+                H5: 'margin:10pt 0 4pt;font-size:11pt;font-weight:600;',
+                H6: 'margin:10pt 0 4pt;font-size:11pt;font-weight:600;',
+                P: 'margin:0 0 8pt;',
+                UL: 'margin:0 0 8pt;padding-left:18pt;',
+                OL: 'margin:0 0 8pt;padding-left:18pt;',
+                LI: 'margin:0 0 3pt;',
+                BLOCKQUOTE: 'margin:0 0 8pt;padding-left:10pt;border-left:2pt solid #cccccc;color:#555555;',
+                PRE: 'margin:0 0 8pt;padding:6pt;background:#f5f5f5;border:1pt solid #dddddd;'
+                     + 'font-family:Consolas,Menlo,monospace;font-size:9pt;white-space:pre-wrap;',
+                TABLE: 'border-collapse:collapse;margin:0 0 8pt;',
+                TH: 'border:1pt solid #bbbbbb;padding:4pt 6pt;background:#f0f0f0;text-align:left;',
+                TD: 'border:1pt solid #bbbbbb;padding:4pt 6pt;',
+                A: 'color:#1155cc;',
+                HR: 'border:none;border-top:1pt solid #cccccc;margin:10pt 0;'
+            };
+
+            holder.querySelectorAll('*').forEach(el => {
+                el.removeAttribute('class');
+                if (el.tagName === 'CODE') {
+                    el.setAttribute('style', el.parentElement && el.parentElement.tagName === 'PRE'
+                        ? 'font-family:Consolas,Menlo,monospace;font-size:9pt;'
+                        : 'font-family:Consolas,Menlo,monospace;font-size:9pt;background:#f0f0f0;padding:0 2pt;');
+                    return;
+                }
+                const rule = styles[el.tagName];
+                if (rule) el.setAttribute('style', rule);
+            });
+
+            return '<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
+                + 'font-size:11pt;line-height:1.5;color:#111111;">' + holder.innerHTML + '</div>';
+        }
+
+        document.getElementById('copyAiPlainBtn').addEventListener('click', () => {
+            copyPlainText(analysisAsPlainText(currentAiResult), document.getElementById('copyAiPlainBtn'));
+        });
+
+        document.getElementById('copyAiMarkdownBtn').addEventListener('click', () => {
+            copyPlainText(currentAiResult, document.getElementById('copyAiMarkdownBtn'));
+        });
+
+        document.getElementById('copyAiRichBtn').addEventListener('click', () => {
+            copyRichHtml(
+                analysisAsRichHtml(currentAiResult),
+                analysisAsPlainText(currentAiResult),
+                document.getElementById('copyAiRichBtn')
+            );
         });
 
         // Start GPU status polling when page loads
