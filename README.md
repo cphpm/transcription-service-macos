@@ -12,6 +12,26 @@ Flask-based transcription service using OpenAI's Whisper model, with optional sp
 - ⚡ **Real-time progress**: Live updates with cancellation support
 - 🎙️ **AI transcript processing**: Local Gemma 4 (`gemma4:e4b`) via Ollama, or the cloud Gemini API
 
+## Requirements
+
+Docker is the only thing you need to install. On a Mac, either download Docker
+Desktop from docker.com or install it from the terminal:
+
+```bash
+brew install --cask docker
+```
+
+Docker Desktop must be running before any of the commands below work. Launch it
+from Applications, or with `open -a Docker`, and wait for the whale icon in the
+menu bar to stop animating. Check that the daemon is up:
+
+```bash
+docker info
+```
+
+If that prints an error about not being able to connect, Docker Desktop is not
+running yet.
+
 ## Quick Start
 
 ```bash
@@ -34,6 +54,55 @@ Add `--gpu` to use an NVIDIA GPU, which needs the NVIDIA container runtime:
 Any further arguments are passed to Docker Compose, so `./start.sh -d` runs it in
 the background. You can also call Compose directly if you prefer; `.env` is
 optional there and the service falls back to its built-in defaults without it.
+
+## Working with the container
+
+The first build downloads PyTorch, Whisper and the model weights, so it takes a
+while and produces an image of roughly 4 GB. Later builds reuse the cached
+layers and only rebuild what changed.
+
+Everything below runs from the project directory. The service is one container
+named `transcription-service`.
+
+```bash
+# Start in the background instead of holding the terminal
+./start.sh -d
+
+# Follow the log output, which is where transcription progress appears
+docker compose logs -f
+
+# Check whether it is running and which port it is on
+docker compose ps
+
+# Stop it, keeping the built image
+docker compose down
+
+# Rebuild after changing app.py or the templates
+docker compose up --build -d
+```
+
+To look around inside the running container, open a shell in it:
+
+```bash
+docker exec -it transcription-service bash
+```
+
+That drops you into `/app`, where `app.py` and `templates/` live. Transcripts are
+written to `/app/outputs`, which is the `outputs/` folder in the project, so
+anything saved there survives the container being removed. The same applies to
+`uploads/`.
+
+If a build fails or behaves oddly, rebuild without the cache:
+
+```bash
+docker compose build --no-cache
+```
+
+To reclaim disk space from old images once you are done:
+
+```bash
+docker image prune
+```
 
 ## Usage
 
@@ -98,12 +167,6 @@ Model weights are baked into the image at build time and no login is required to
 - **GPU**: Considerably faster, requires an NVIDIA GPU and the GPU compose file
 
 The device selector is hidden when no CUDA device is present.
-
-## Stopping the Service
-
-```bash
-docker compose down
-```
 
 ## Troubleshooting
 
