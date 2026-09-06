@@ -18,6 +18,10 @@ services:
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-30m}
       - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-auto}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    # Without an init process, python runs as PID 1 and never acts on
+    # SIGTERM, so stopping the container ends in a SIGKILL and an
+    # alarming "Exited (137)" in Docker Desktop.
+    init: true
     restart: unless-stopped
     # Docker Desktop provides this name already; the mapping is what makes the
     # host reachable on Linux too.

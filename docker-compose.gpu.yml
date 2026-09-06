@@ -28,6 +28,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    # Without an init process, python runs as PID 1 and never acts on
+    # SIGTERM, so stopping the container ends in a SIGKILL and an
+    # alarming "Exited (137)" in Docker Desktop.
+    init: true
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -115,12 +115,42 @@ docker compose logs -f
 # Check whether it is running and which port it is on
 docker compose ps
 
-# Stop it, keeping the built image
-docker compose down
+# Pause it for now, keeping the container so you can start it again
+docker compose stop
+
+# Start it again, in about a second, with no rebuild
+docker compose start
 
 # Rebuild after changing app.py or the templates
 docker compose up --build -d
 ```
+
+### Stopping without losing the container
+
+Use `docker compose stop`, not `docker compose down`.
+
+`stop` shuts the service down but leaves the container in place. It then appears
+in Docker Desktop under Containers with a play button, so you can start it again
+from there instead of the terminal, and `docker compose start` does the same
+thing from the command line. Neither rebuilds anything, so it comes back in about
+a second.
+
+`down` deletes the container and its network. Nothing is left to press play on,
+and the next start has to create a container again. Use it only when you want a
+clean slate:
+
+```bash
+docker compose down
+```
+
+The built image survives either way, so even `down` does not mean rebuilding from
+scratch.
+
+The service is set to restart unless you stopped it deliberately, so once it is
+running it comes back on its own when Docker Desktop starts.
+
+A stopped container shows `Exited (143)`. That is the normal code for a clean
+shutdown by signal, not an error.
 
 To look around inside the running container, open a shell in it:
 
