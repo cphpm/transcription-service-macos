@@ -1,12 +1,12 @@
 # Audio/Video Transcription Service
 
-Flask-based transcription service using OpenAI's Whisper model with automatic speaker detection.
+Flask-based transcription service using OpenAI's Whisper model, with optional speaker identification. Everything runs locally.
 
 ## Features
 
 - 🎙️ **Multi-format support**: MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM, MKV
-- 👥 **Speaker diarization**: Automatic detection of 2-6 speakers
-- 🚀 **Flexible processing**: CPU
+- 👥 **Optional speaker identification**: Off by default. When on, detects one to six speakers without assuming there is more than one
+- 🚀 **Runs offline**: Model weights ship in the image; no account, token or outbound call is needed to transcribe
 - 🎯 **Fixed transcription model**: Whisper large-v3-turbo, matched large-v3 output in testing at about a quarter of the time
 - 🌐 **Web interface**: Drag-and-drop file upload with progress tracking
 - ⚡ **Real-time progress**: Live updates with cancellation support
@@ -14,9 +14,9 @@ Flask-based transcription service using OpenAI's Whisper model with automatic sp
 
 ## Quick Start
 
-### Option 1: CPU Mode (Works on All Systems)
+### Option 1: CPU (works everywhere)
 
-**Recommended for MacBooks**
+**Recommended for MacBooks.** Docker on macOS has no GPU access, so this is the only option there.
 
 ```bash
 # Build and start the service
@@ -24,6 +24,14 @@ docker-compose up --build
 
 # Access the web interface
 open http://localhost:8080
+```
+
+### Option 2: NVIDIA GPU
+
+Requires an NVIDIA GPU and the NVIDIA container runtime.
+
+```bash
+docker-compose -f docker-compose.gpu.yml up --build
 ```
 
 ## Usage
@@ -38,9 +46,18 @@ open http://localhost:8080
 
 Transcripts are saved in `./outputs/` with timestamps and speaker labels:
 
+With speaker identification on:
+
 ```
 [00:00:00 - 00:00:04] Speaker 1: Hello, how are you?
 [00:00:04 - 00:00:07] Speaker 2: I'm doing well, thanks!
+```
+
+With it off:
+
+```
+[00:00:00 - 00:00:04] Hello, how are you?
+[00:00:04 - 00:00:07] I'm doing well, thanks!
 ```
 
 ## Supported File Formats
@@ -52,9 +69,12 @@ Transcripts are saved in `./outputs/` with timestamps and speaker labels:
 
 - `GET /` - Web interface
 - `POST /upload` - Upload file for transcription
+- `POST /ai-analysis` - Summarise or analyse a finished transcript
 - `GET /download/<filename>` - Download transcript
 - `POST /cancel/<task_id>` - Cancel running transcription
+- `GET /gpu-status` - Whether a transcription or analysis is currently running
 - `GET /health` - System health check
+- `GET /favicon.svg` - Browser tab icon
 
 ## Configuration
 
@@ -73,8 +93,10 @@ No account and no token are needed. If speaker identification cannot run, the in
 Model weights are baked into the image at build time and no login is required to build or run. At runtime the container is set to `HF_HUB_OFFLINE` with telemetry disabled, so transcription never contacts HuggingFace or any other third party. The only outbound call the service can make is to the Gemini API, and only when you explicitly pick the cloud option for transcript analysis.
 
 ### Device Selection
-- **CPU**: Works everywhere, slower (recommended for MacBooks)
-- **GPU**: 5-10x faster, requires NVIDIA GPU
+- **CPU**: Works everywhere, slower (the only option on macOS)
+- **GPU**: Considerably faster, requires an NVIDIA GPU and the GPU compose file
+
+The device selector is hidden when no CUDA device is present.
 
 ## Stopping the Service
 
@@ -132,4 +154,6 @@ Analysis waits up to `OLLAMA_TIMEOUT_SECONDS` (600 by default). For scale, a col
 
 ## License
 
-This project uses OpenAI's Whisper model. Check their licensing terms for commercial use.
+This project uses OpenAI's Whisper model, run through
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper), and SpeechBrain's
+ECAPA-TDNN speaker embeddings. Check their licensing terms for commercial use.

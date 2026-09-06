@@ -35,27 +35,28 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Install python-dotenv for environment variable management
 RUN pip3 install --no-cache-dir python-dotenv
 
-# Install speaker diarization packages separately (avoids pip resolution-too-deep with torch)
+# Speaker embeddings, installed separately to avoid pip resolution-too-deep with torch.
 ENV TORCHAUDIO_USE_BACKEND_DISPATCHER=1
-RUN pip3 install --no-cache-dir speechbrain>=1.0.0 "pyannote.audio>=4.0.0"
+RUN pip3 install --no-cache-dir "speechbrain==1.1.1"
 
-# Pre-download models during build so they're baked into the image
-ARG HF_TOKEN
+# Pre-download models during build so they're baked into the image.
+# large-v3-turbo has no Systran conversion; faster-whisper itself resolves the
+# 'turbo' name to this repo. Pinned by commit so the baked weights cannot change.
 RUN python3 -c "\
 from huggingface_hub import snapshot_download; \
-snapshot_download('Systran/faster-whisper-base'); \
-snapshot_download('Systran/faster-whisper-medium'); \
-snapshot_download('Systran/faster-whisper-large-v3')"
+snapshot_download('mobiuslabsgmbh/faster-whisper-large-v3-turbo', \
+                  revision='0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf', \
+                  local_dir='/opt/whisper-large-v3-turbo')"
 
 RUN python3 -c "\
 from huggingface_hub import snapshot_download; \
 snapshot_download('speechbrain/spkrec-ecapa-voxceleb', local_dir='/opt/huggingface/speechbrain_ecapa')"
 
-RUN if [ -n "$HF_TOKEN" ]; then python3 -c "\
-import os; \
-from huggingface_hub import snapshot_download; \
-snapshot_download('pyannote/speaker-diarization-community-1', token=os.environ['HF_TOKEN'])"; \
-else echo 'HF_TOKEN not set, skipping pyannote pre-download'; fi
+# All weights are baked in above. Block any further contact with HuggingFace so
+# nothing about what gets transcribed leaves this machine at runtime.
+ENV HF_HUB_OFFLINE=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
+ENV DISABLE_TELEMETRY=1
 
 # Create directories
 RUN mkdir -p /app/uploads /app/outputs /app/models

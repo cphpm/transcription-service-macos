@@ -50,7 +50,6 @@ snapshot_download('speechbrain/spkrec-ecapa-voxceleb', local_dir='/opt/huggingfa
 # nothing about what gets transcribed leaves this machine at runtime.
 ENV HF_HUB_OFFLINE=1
 ENV HF_HUB_DISABLE_TELEMETRY=1
-ENV HF_HUB_DISABLE_IMPLICIT_TOKEN=1
 ENV DISABLE_TELEMETRY=1
 
 # Create directories
