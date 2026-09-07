@@ -323,6 +323,23 @@
             font-size: 0.82em;
         }
 
+        .context-note {
+            margin: 14px 0 0;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--color-warning);
+            background: rgba(245, 158, 11, 0.12);
+            color: var(--color-text-secondary);
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+
+        .context-note.fits {
+            border-color: var(--color-border);
+            background: var(--color-bg-tertiary);
+            color: var(--color-text-tertiary);
+        }
+
         .engine-note {
             margin: 8px 0 0;
             color: rgba(255, 255, 255, 0.75);
@@ -1608,6 +1625,8 @@
                             🎯 Run Custom Prompt
                         </button>
                     </div>
+
+                    <p class="context-note" id="contextNote" hidden></p>
                 </div>
 
                 <!-- AI Status -->
@@ -2076,11 +2095,132 @@
             }
 
             if (!aiBackendAvailable) disableAiAnalysis();
+
+            contextInfo = ai;
+            updateContextNote();
+        }
+
+        // Mirrors plan_context_window() in app.py so the page can warn before
+        // submitting rather than after the server has refused. The server
+        // remains the authority; this is only the early warning.
+        function planContextWindow(transcriptChars) {
+            if (!contextInfo) return null;
+
+            const charsPerToken = contextInfo.chars_per_token || 3;
+            const reserved = (contextInfo.reserved_output_tokens || 0)
+                + (contextInfo.headroom_tokens || 0);
+            const ladder = contextInfo.context_ladder || [];
+            const override = contextInfo.context_override;
+
+            // The template and safety prefix wrapped around the transcript
+            // occupy the same window, so they count against it here too.
+            const overhead = contextInfo.prompt_overhead_chars || 0;
+            const estimated = Math.floor((transcriptChars + overhead) / charsPerToken) + 1;
+
+            let ctxWindow;
+            if (override) {
+                ctxWindow = override;
+            } else {
+                const bounds = [contextInfo.context_limit, contextInfo.context_ceiling]
+                    .filter(value => typeof value === 'number' && value > 0);
+                const ceiling = bounds.length
+                    ? Math.min(...bounds)
+                    : (ladder[ladder.length - 1] || 32768);
+                const floor = Math.min(contextInfo.context_floor || 32768, ceiling);
+
+                const required = estimated + reserved;
+                let target = ceiling;
+                for (const rung of ladder) {
+                    if (rung >= required) { target = rung; break; }
+                }
+                ctxWindow = Math.max(floor, Math.min(target, ceiling));
+            }
+
+            const budget = Math.max(
+                0, Math.floor((ctxWindow - reserved) * charsPerToken) - overhead);
+            return {
+                window: ctxWindow,
+                estimated: estimated,
+                dropped: Math.max(0, transcriptChars - budget)
+            };
+        }
+
+        // Warn while there is still time to switch to the cloud model, which
+        // has a far larger window than anything running locally.
+        function updateContextNote() {
+            const note = document.getElementById('contextNote');
+            if (!note) return;
+
+            const usingLocal = getSelectedAiModel() === 'gemma';
+            if (!usingLocal || !transcriptText) {
+                note.hidden = true;
+                return;
+            }
+
+            const plan = planContextWindow(transcriptText.length);
+            if (!plan) {
+                note.hidden = true;
+                return;
+            }
+
+            const n = value => value.toLocaleString();
+            if (plan.dropped > 0) {
+                note.className = 'context-note';
+                note.textContent = `\u26A0\uFE0F This transcript is roughly ${n(plan.estimated)} tokens, `
+                    + `more than the ${n(plan.window)} token window available locally. About `
+                    + `${n(plan.dropped)} characters would be dropped from the start. You will be `
+                    + `asked to confirm before it runs. Cloud Gemini has a much larger window.`;
+            } else {
+                note.className = 'context-note fits';
+                note.textContent = `Context window: ${n(plan.window)} tokens, for an estimated `
+                    + `${n(plan.estimated)} token transcript. The whole transcript fits.`;
+            }
+            note.hidden = false;
+        }
+
+        // The window only constrains the local model, so the note follows the
+        // selection as well as the transcript.
+        for (const radio of document.getElementsByName('aiModel')) {
+            radio.addEventListener('change', updateContextNote);
         }
 
         window.addEventListener('DOMContentLoaded', loadSystemInfo);
 
         // Cancel button handler
+        // Poll a started transcription until it finishes. Resolves with the
+        // result payload, or throws describing what went wrong.
+        async function awaitTranscription(taskId, signal) {
+            const POLL_MS = 2000;
+
+            for (;;) {
+                await new Promise(resolve => setTimeout(resolve, POLL_MS));
+
+                if (signal && signal.aborted) {
+                    throw new DOMException('Cancelled', 'AbortError');
+                }
+
+                let response;
+                try {
+                    response = await fetch(`/task/${taskId}`);
+                } catch (error) {
+                    // The job keeps running on the server, so a blip here is
+                    // not fatal. Try again on the next tick.
+                    continue;
+                }
+
+                if (response.status === 404) {
+                    throw new Error('The transcription finished but its result expired '
+                        + 'before this page collected it. Check the outputs folder.');
+                }
+
+                const data = await response.json();
+
+                if (data.status === 'done') return data.result;
+                if (data.status === 'cancelled') throw new Error('Transcription cancelled');
+                if (data.status === 'error') throw new Error(data.error || 'Transcription failed');
+            }
+        }
+
         cancelBtn.addEventListener('click', async () => {
             if (currentTaskId) {
                 try {
@@ -2443,17 +2583,25 @@
             startProgress();
 
             try {
-                const response = await fetch('/upload', {
+                const started = await fetch('/upload', {
                     method: 'POST',
                     body: formData,
                     signal: abortController.signal
                 });
 
-                const result = await response.json();
+                const accepted = await started.json();
 
-                if (result.task_id) {
-                    currentTaskId = result.task_id;
+                if (!started.ok || !accepted.task_id) {
+                    throw new Error(accepted.error || 'Could not start transcription');
                 }
+
+                currentTaskId = accepted.task_id;
+
+                // The upload request returns as soon as the file is stored, and
+                // the transcript is collected by polling. Holding one connection
+                // open for a multi-hour job meant anything that dropped an idle
+                // connection lost a transcript the server had already produced.
+                const result = await awaitTranscription(currentTaskId, abortController.signal);
 
                 if (result.success) {
                     completeProgress();
@@ -2491,14 +2639,13 @@
 
                     // Enable AI analysis after successful transcription
                     enableAiAnalysis();
+                    updateContextNote();
 
                     downloadUrl = result.download_url;
 
                     setTimeout(() => {
                         progressContainer.classList.remove('show');
                     }, 3000);
-                } else if (result.cancelled) {
-                    throw new Error('Transcription cancelled');
                 } else {
                     throw new Error(result.error || 'Unknown error');
                 }
@@ -2533,6 +2680,9 @@
 
         // Set from /health: false when neither analysis backend can run.
         let aiBackendAvailable = true;
+
+        // Context sizing reported by /health, used for the overflow warning.
+        let contextInfo = null;
 
         // Show AI analysis section when transcript is available
         function enableAiAnalysis() {
@@ -2835,7 +2985,7 @@
                     requestData.custom_prompt = customPrompt;
                 }
 
-                const response = await fetch('/ai-analysis', {
+                const send = () => fetch('/ai-analysis', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -2843,7 +2993,25 @@
                     body: JSON.stringify(requestData)
                 });
 
-                const result = await response.json();
+                let response = await send();
+                let result = await response.json();
+
+                // The server refuses a transcript that cannot fit the window
+                // until it is told to go ahead, so nobody reads a summary of
+                // the tail of a meeting without knowing that is what it is.
+                if (response.status === 409 && result.code === 'transcript_exceeds_context') {
+                    if (!window.confirm(result.error)) {
+                        aiStatus.className = 'status show';
+                        aiStatus.textContent = 'Analysis cancelled. The transcript is longer '
+                            + 'than the local context window.';
+                        return;
+                    }
+                    requestData.confirm_truncation = true;
+                    aiStatus.className = 'status processing show';
+                    aiStatus.innerHTML = '<div class="spinner"></div>Analyzing the part that fits...';
+                    response = await send();
+                    result = await response.json();
+                }
 
                 if (result.success) {
                     currentAiResult = result.analysis;
@@ -2851,8 +3019,19 @@
                     aiResults.style.display = 'block';
 
                     const modelName = aiModel === 'gemma' ? 'Local {{ gemma_model }}' : 'Cloud Gemini';
-                    aiStatus.className = 'status success show';
-                    aiStatus.innerHTML = `✅ Analysis complete using ${modelName}`;
+                    const ctx = result.context;
+                    let statusText = `✅ Analysis complete using ${modelName}`;
+                    if (ctx && ctx.chars_dropped > 0) {
+                        statusText = `⚠️ Analysis complete using ${modelName}, but about `
+                            + `${ctx.chars_dropped.toLocaleString()} characters did not fit the `
+                            + `${ctx.window.toLocaleString()} token window and were dropped from `
+                            + 'the start of the transcript.';
+                    } else if (ctx) {
+                        statusText += ` with a ${ctx.window.toLocaleString()} token context window`;
+                    }
+                    aiStatus.className = ctx && ctx.chars_dropped > 0
+                        ? 'status show' : 'status success show';
+                    aiStatus.innerHTML = statusText;
                 } else {
                     throw new Error(result.error || 'Analysis failed');
                 }

@@ -47,6 +47,25 @@ docker info
 If that prints an error about not being able to connect, Docker Desktop is not
 running yet.
 
+### Memory
+
+Transcription holds the whole recording in memory, so what it needs grows with
+the length of the audio rather than the size of the file. Docker Desktop also
+hands containers only the slice of RAM you allocate to it, not everything the
+machine has.
+
+On a Mac, 16 GB of RAM with 10 GB allocated to Docker is the recommendation.
+Raise the allocation in Docker Desktop under **Settings, Resources, Advanced**:
+drag the **Memory limit** slider to 10 GB and apply the change, which restarts
+the engine.
+
+The default 8 GB allocation is not enough for long recordings. A three-hour
+file exhausts it, and because the container restarts itself the browser shows
+nothing more useful than a network error.
+
+Shorter recordings need far less. An 8 GB allocation copes with typical
+meeting-length audio; it is multi-hour material that runs it out.
+
 ## Quick Start
 
 Clone the repository and start it:
@@ -183,6 +202,14 @@ docker image prune
 4. Click "Transcribe" and wait for processing
 5. View, copy, or download the transcript
 
+Transcription runs in the background. Uploading returns straight away with a task
+identifier, and the page polls for the result rather than holding one connection
+open for the whole job. A three-hour recording can take half an hour on a CPU,
+and a connection left idle that long is liable to be dropped by something in
+between, which used to lose a transcript that had in fact been produced. Cancel
+stops the work on the server, and every transcript is written to `./outputs/`
+regardless of what the browser is doing.
+
 ## Output Format
 
 Transcripts are saved in `./outputs/` with timestamps and speaker labels:
@@ -209,7 +236,8 @@ With it off:
 ## API Endpoints
 
 - `GET /` - Web interface
-- `POST /upload` - Upload file for transcription
+- `POST /upload` - Start a transcription, returning `202` with a `task_id`
+- `GET /task/<task_id>` - Poll that transcription and collect its result
 - `POST /ai-analysis` - Summarise or analyse a finished transcript
 - `GET /download/<filename>` - Download transcript
 - `POST /cancel/<task_id>` - Cancel running transcription
@@ -247,8 +275,21 @@ case on macOS.
 - This is normal - Macs use CPU processing
 - **Tips**:
   - Name the language instead of leaving it on auto
-  - Consider using smaller file chunks
   - Expect ~1-2 minutes per minute of audio on CPU
+
+### Transcription stops with a network error
+
+Usually the container ran out of memory and restarted, taking the running job
+with it. The restart is quiet, so the browser reports only that the connection
+went away. Check whether it happened:
+
+```bash
+docker inspect transcription-service --format '{{.RestartCount}} restarts, last exit {{.State.ExitCode}}'
+```
+
+Raise Docker Desktop's memory allocation as described under Requirements above.
+Note that a transcript which did finish is always written to `./outputs/`,
+whatever the browser ends up showing.
 
 ### Port already in use
 - Change the port in `docker-compose.yml`:
@@ -286,7 +327,31 @@ Either option is greyed out in the interface when it cannot run, with a note say
 
 Analysis waits up to `OLLAMA_TIMEOUT_SECONDS` (600 by default). For scale, a cold model load costs roughly 35 seconds and a 45-minute transcript takes about 90 seconds more. `OLLAMA_KEEP_ALIVE` holds the model in memory so only the first analysis pays the load.
 
-`GET /health` reports whether Ollama is reachable and which models it has available.
+### Context window
+
+Ollama drops the front of a prompt that does not fit the context window, and it does not say so. Left at the server default, a long transcript would be summarised from its tail alone. The service therefore picks a window per analysis, from the transcript's own length.
+
+The size starts at `OLLAMA_NUM_CTX_MIN` and grows through 32K, 64K, 96K and 128K as the transcript needs it, never past what the model reports it supports. It snaps to those steps rather than picking an exact number because Ollama reloads the model whenever the window changes, which would otherwise undo `OLLAMA_KEEP_ALIVE` on every run.
+
+| Setting | Purpose | Default |
+| --- | --- | --- |
+| `OLLAMA_NUM_CTX_MIN` | Smallest window to ask for | 32768 |
+| `OLLAMA_NUM_CTX_MAX` | Largest window to ask for, guarding host memory | empty, meaning the model's own limit |
+| `OLLAMA_NUM_CTX` | Fixed window, turning automatic sizing off | empty, meaning automatic |
+| `OLLAMA_NUM_PREDICT` | Tokens reserved for the answer | 2000 |
+| `OLLAMA_CHARS_PER_TOKEN` | Estimation ratio when no tokeniser is present | 3.0 |
+
+A large window costs memory, because the key-value cache scales with it. Set `OLLAMA_NUM_CTX_MAX` if you want a firm bound below what the model allows.
+
+The interface shows the chosen window under the analysis buttons, and warns there when a transcript will not fit. A transcript that overflows even the largest allowed window is not analysed until you confirm it, and the result then says how much was dropped. Cloud Gemini has a far larger window and is the better choice for very long recordings.
+
+Ask Ollama what a model actually supports:
+
+```bash
+curl -s http://localhost:11434/api/show -d '{"model":"gemma4:e4b"}' | python3 -c "import json,sys; i=json.load(sys.stdin)['model_info']; print(i['general.architecture']); print({k:v for k,v in i.items() if k.endswith('.context_length')})"
+```
+
+`GET /health` reports whether Ollama is reachable, which models it has available, and the context limit of the configured model.
 
 ## License
 

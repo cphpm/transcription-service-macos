@@ -6,7 +6,7 @@ import librosa
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 from scipy.spatial.distance import pdist
-from datetime import datetime
+from datetime import datetime, timedelta
 import torch
 import psutil
 import threading
@@ -16,6 +16,7 @@ import sys
 import ctypes
 import requests
 import json
+import time
 try:
     from google import genai
     from google.genai import types
@@ -92,6 +93,19 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 active_tasks = {}
 task_lock = threading.Lock()
 
+# A finished task keeps its result until the page collects it. Without a sweep
+# those results would accumulate for the life of the process.
+FINISHED_TASK_TTL_SECONDS = 3600
+
+
+def _sweep_finished_tasks_locked():
+    """Drop finished tasks nobody collected. The caller must hold task_lock."""
+    cutoff = datetime.now() - timedelta(seconds=FINISHED_TASK_TTL_SECONDS)
+    stale = [tid for tid, task in active_tasks.items()
+             if task.get('finished') and task['finished'] < cutoff]
+    for tid in stale:
+        active_tasks.pop(tid, None)
+
 class TranscriptionCancelled(Exception):
     """Custom exception for cancelled transcription"""
     pass
@@ -110,6 +124,76 @@ OLLAMA_TIMEOUT_SECONDS = int(os.getenv('OLLAMA_TIMEOUT_SECONDS', '600'))
 
 # Keep the model resident between analyses so only the first one pays the load.
 OLLAMA_KEEP_ALIVE = os.getenv('OLLAMA_KEEP_ALIVE', '30m')
+
+
+def _positive_int_env(name, default):
+    """Read a positive integer setting, falling back when unset or unparseable."""
+    raw = (os.getenv(name) or '').strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"Ignoring {name}={raw!r}: not an integer. Using {default}.")
+        return default
+    if value < 0:
+        print(f"Ignoring {name}={raw!r}: must not be negative. Using {default}.")
+        return default
+    return value
+
+
+def _positive_float_env(name, default):
+    """Read a positive float setting, falling back when unset or unparseable."""
+    raw = (os.getenv(name) or '').strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        print(f"Ignoring {name}={raw!r}: not a number. Using {default}.")
+        return default
+    if value <= 0:
+        print(f"Ignoring {name}={raw!r}: must be positive. Using {default}.")
+        return default
+    return value
+
+
+# Ollama drops the front of a prompt that exceeds the context window instead of
+# erroring, so an unsized window means a long transcript is analysed from its
+# tail with nothing to show for it. The window is therefore chosen per request
+# from the transcript's own size.
+
+# Floor for the window. Anything smaller truncates a transcript of real length.
+OLLAMA_NUM_CTX_MIN = _positive_int_env('OLLAMA_NUM_CTX_MIN', 32768) or 32768
+
+# Memory-safe ceiling. A large window's key-value cache costs host RAM, and
+# Ollama runs on the host rather than in this container. 0 means the model's
+# own reported limit is the only bound.
+OLLAMA_NUM_CTX_MAX = _positive_int_env('OLLAMA_NUM_CTX_MAX', 0)
+
+# Escape hatch: a fixed window that disables sizing entirely. 0 means auto.
+OLLAMA_NUM_CTX = _positive_int_env('OLLAMA_NUM_CTX', 0)
+
+# Output tokens reserved out of the window. Prompt and completion share it.
+OLLAMA_NUM_PREDICT = _positive_int_env('OLLAMA_NUM_PREDICT', 2000) or 2000
+
+# Characters per token, used to estimate a prompt without a tokeniser. Chosen
+# pessimistically: Danish and mixed-language transcripts tokenise worse than
+# English, and over-estimating only asks for a slightly larger window.
+OLLAMA_CHARS_PER_TOKEN = _positive_float_env('OLLAMA_CHARS_PER_TOKEN', 3.0)
+
+# Slack for the prompt template, chat formatting and estimation error.
+CONTEXT_HEADROOM_TOKENS = 512
+
+# Windows snap to these rungs. Ollama reloads the model whenever num_ctx
+# changes, which costs the cold load that OLLAMA_KEEP_ALIVE exists to avoid,
+# so repeat analyses should land on a shared rung rather than a bespoke size.
+CONTEXT_LADDER = (32768, 65536, 98304, 131072)
+
+# How long a model's reported context limit stays cached. Long enough that a
+# burst of analyses costs one lookup, short enough that re-pulling a model is
+# picked up without restarting the service.
+MODEL_INFO_CACHE_SECONDS = 300
 
 # The service runs a single Whisper model. large-v3-turbo matched large-v3
 # output in testing at roughly a quarter of the time.
@@ -450,8 +534,14 @@ def release_gpu(operation_type):
         elif operation_type == 'ai_analysis':
             ai_analysis_active = False
 
-def sanitize_ai_input(text):
-    """Sanitize input to prevent prompt injection attacks"""
+def sanitize_ai_input(text, max_length=15000, truncation_marker=None):
+    """Sanitize input to prevent prompt injection attacks.
+
+    max_length caps the result. The default is the long-standing safety cap;
+    callers that have sized a context window pass their own budget instead.
+    truncation_marker replaces the note appended when text is cut, so a cut
+    made for capacity is not reported as one made for safety.
+    """
     import re
 
     if not text:
@@ -471,10 +561,10 @@ def sanitize_ai_input(text):
     for pattern in dangerous_patterns:
         text = re.sub(pattern, '[REDACTED]', text, flags=re.IGNORECASE)
 
-    # Limit length to prevent token exhaustion
-    max_length = 15000
-    if len(text) > max_length:
-        text = text[:max_length] + "\n\n[Content truncated for safety...]"
+    # Limit length so the prompt cannot exhaust the context window.
+    if max_length is not None and len(text) > max_length:
+        marker = truncation_marker or "[Content truncated for safety...]"
+        text = text[:max_length] + "\n\n" + marker
 
     return text
 
@@ -510,10 +600,153 @@ Insights:""",
 
     return prompts.get(analysis_type, prompts['summarize'])
 
-def analyze_with_ollama(transcript, prompt_template):
+# Cached per model tag: Ollama's reported limit changes only when a model is
+# re-pulled, but a health poll should not pay a round trip every few seconds.
+_model_info_cache = {}
+_model_info_lock = threading.Lock()
+
+
+def get_model_context_limit(model_name=None, refresh=False):
+    """Ask Ollama how large a context window the model was trained for.
+
+    The value lives in model_info under a key named after the architecture the
+    GGUF declares, so the key has to be built from general.architecture rather
+    than guessed from the tag. Returns None when Ollama is unreachable or the
+    field is absent; every caller has to cope with an unknown limit.
+    """
+    model_name = model_name or GEMMA_MODEL_NAME
+    now = time.time()
+
+    if not refresh:
+        with _model_info_lock:
+            cached = _model_info_cache.get(model_name)
+        if cached:
+            # Re-check a failed lookup sooner than a successful one, so a
+            # restarted Ollama is picked up quickly.
+            ttl = MODEL_INFO_CACHE_SECONDS if cached['limit'] else 30
+            if now - cached['fetched_at'] < ttl:
+                return cached['limit']
+
+    limit = None
+    try:
+        response = requests.post(
+            f'{OLLAMA_BASE_URL}/api/show',
+            json={'model': model_name},
+            timeout=5
+        )
+        if response.status_code == 200:
+            info = response.json().get('model_info') or {}
+            architecture = info.get('general.architecture')
+            candidate = info.get(f'{architecture}.context_length') if architecture else None
+            if not isinstance(candidate, int):
+                candidate = next(
+                    (value for key, value in info.items()
+                     if key.endswith('.context_length') and isinstance(value, int)),
+                    None
+                )
+            if isinstance(candidate, int) and candidate > 0:
+                limit = candidate
+        else:
+            print(f"Ollama /api/show returned {response.status_code} for {model_name}")
+    except Exception as e:
+        print(f"Could not read the context limit for {model_name}: {e}")
+
+    with _model_info_lock:
+        _model_info_cache[model_name] = {'limit': limit, 'fetched_at': now}
+    return limit
+
+
+def estimate_tokens(char_count):
+    """Approximate a token count without a tokeniser. Rounds up, never down."""
+    if char_count <= 0:
+        return 0
+    return int(char_count / OLLAMA_CHARS_PER_TOKEN) + 1
+
+
+def plan_context_window(transcript_chars, overhead_chars=0):
+    """Choose a context window for a transcript of the given length.
+
+    overhead_chars covers the prompt template and safety prefix wrapped around
+    the transcript, which share the same window. Returns a dict describing the
+    decision so the route can report it and the interface can warn before
+    anything is cut.
+    """
+    transcript_chars = max(0, int(transcript_chars))
+    overhead_chars = max(0, int(overhead_chars))
+
+    model_limit = get_model_context_limit()
+    estimated_prompt_tokens = estimate_tokens(transcript_chars + overhead_chars)
+    reserved = OLLAMA_NUM_PREDICT + CONTEXT_HEADROOM_TOKENS
+
+    if OLLAMA_NUM_CTX:
+        # An explicit setting is taken at face value, including past what the
+        # model claims to support: that is the point of an escape hatch.
+        window = OLLAMA_NUM_CTX
+        ceiling = OLLAMA_NUM_CTX
+        source = 'override'
+    else:
+        bounds = [b for b in (model_limit, OLLAMA_NUM_CTX_MAX) if b]
+        ceiling = min(bounds) if bounds else max(CONTEXT_LADDER)
+
+        # The floor only applies where the ceiling leaves room for it. Asking
+        # for more than the model supports degrades output rather than helping.
+        floor = min(OLLAMA_NUM_CTX_MIN, ceiling)
+
+        required = estimated_prompt_tokens + reserved
+        target = ceiling
+        for rung in CONTEXT_LADDER:
+            if rung >= required:
+                target = rung
+                break
+
+        window = max(floor, min(target, ceiling))
+        source = 'auto'
+
+    # Name whichever bound actually binds, so a message about a transcript that
+    # will not fit points at the setting the reader can change.
+    if source == 'override':
+        limit_reason = f"the OLLAMA_NUM_CTX setting of {window}"
+    elif model_limit and ceiling >= model_limit:
+        limit_reason = f"the model's own limit of {model_limit}"
+    elif OLLAMA_NUM_CTX_MAX and ceiling == OLLAMA_NUM_CTX_MAX:
+        limit_reason = f"the OLLAMA_NUM_CTX_MAX setting of {OLLAMA_NUM_CTX_MAX}"
+    else:
+        limit_reason = f"the {ceiling} token ceiling in effect"
+
+    prompt_token_budget = max(0, window - reserved)
+    total_char_budget = int(prompt_token_budget * OLLAMA_CHARS_PER_TOKEN)
+    transcript_char_budget = max(0, total_char_budget - overhead_chars)
+    chars_dropped = max(0, transcript_chars - transcript_char_budget)
+
+    return {
+        'window': window,
+        'source': source,
+        'model_limit': model_limit,
+        'ceiling': ceiling,
+        'limit_reason': limit_reason,
+        'floor': OLLAMA_NUM_CTX_MIN,
+        'reserved_output_tokens': OLLAMA_NUM_PREDICT,
+        'headroom_tokens': CONTEXT_HEADROOM_TOKENS,
+        'chars_per_token': OLLAMA_CHARS_PER_TOKEN,
+        'estimated_prompt_tokens': estimated_prompt_tokens,
+        'transcript_chars': transcript_chars,
+        'transcript_char_budget': transcript_char_budget,
+        'chars_dropped': chars_dropped,
+        'fits': chars_dropped == 0,
+    }
+
+
+def analyze_with_ollama(transcript, prompt_template, context_plan=None):
     """Use local Ollama service for AI analysis with Gemma 4"""
     try:
         full_prompt = prompt_template.format(transcript=transcript)
+
+        if context_plan is None:
+            context_plan = plan_context_window(
+                len(transcript),
+                len(prompt_template) - len('{transcript}')
+            )
+        window = context_plan['window']
 
         response = requests.post(
             f'{OLLAMA_BASE_URL}/api/generate',
@@ -525,7 +758,8 @@ def analyze_with_ollama(transcript, prompt_template):
                 'options': {
                     'temperature': 0.7,
                     'top_p': 0.9,
-                    'num_predict': 2000
+                    'num_predict': OLLAMA_NUM_PREDICT,
+                    'num_ctx': window
                 }
             },
             timeout=OLLAMA_TIMEOUT_SECONDS
@@ -533,6 +767,27 @@ def analyze_with_ollama(transcript, prompt_template):
 
         if response.status_code == 200:
             result = response.json()
+
+            # prompt_eval_count is the only exact token count available, since
+            # no tokeniser ships with the service. A count that reaches the
+            # window means Ollama dropped the start of the prompt.
+            prompt_tokens = result.get('prompt_eval_count')
+            if isinstance(prompt_tokens, int) and prompt_tokens > 0:
+                # The measured ratio is the only way to calibrate
+                # OLLAMA_CHARS_PER_TOKEN for the language actually being
+                # transcribed. A measured ratio well above the setting means
+                # transcripts are being trimmed earlier than they need to be.
+                measured = len(full_prompt) / prompt_tokens
+                print(f"Ollama context: num_ctx={window}, prompt used "
+                      f"{prompt_tokens} tokens, estimated "
+                      f"{context_plan['estimated_prompt_tokens']}, measured "
+                      f"{measured:.2f} chars/token against a configured "
+                      f"{OLLAMA_CHARS_PER_TOKEN}")
+                if prompt_tokens >= window - CONTEXT_HEADROOM_TOKENS:
+                    print(f"WARNING: the prompt filled the {window}-token window. "
+                          "Ollama truncates from the start, so this analysis may "
+                          "cover only the end of the transcript.")
+
             return result.get('response', ''), None
         else:
             error_msg = f"Ollama API error: {response.status_code}"
@@ -585,7 +840,22 @@ def analyze_with_gemini(transcript, prompt_template):
     except Exception as e:
         return None, f"Gemini analysis failed: {str(e)}"
 
-def perform_ai_analysis(transcript, analysis_type, ai_model='gemma', custom_prompt=None):
+def plan_transcript_analysis(transcript, analysis_type, custom_prompt=None):
+    """Size the local context window for an analysis without running it.
+
+    The route calls this first so it can warn about, and gate on, a transcript
+    that will not fit before any work starts.
+    """
+    if custom_prompt:
+        custom_prompt = sanitize_ai_input(custom_prompt)
+
+    prompt_template = get_analysis_prompt(analysis_type, custom_prompt)
+    overhead = len(prompt_template) - len('{transcript}')
+    return plan_context_window(len(transcript or ''), overhead)
+
+
+def perform_ai_analysis(transcript, analysis_type, ai_model='gemma', custom_prompt=None,
+                        context_plan=None):
     """
     Main function to perform AI analysis on transcript
 
@@ -594,23 +864,41 @@ def perform_ai_analysis(transcript, analysis_type, ai_model='gemma', custom_prom
         analysis_type: Type of analysis ('summarize', 'insights', 'custom')
         ai_model: Which AI model to use ('gemma' for local, 'gemini' for cloud)
         custom_prompt: Custom prompt text (only used when analysis_type='custom')
+        context_plan: Window plan from plan_transcript_analysis. Recomputed when
+            omitted, and unused by the cloud model.
 
     Returns:
         tuple: (analysis_result, error_message)
     """
-    # Sanitize inputs to prevent prompt injection
-    transcript = sanitize_ai_input(transcript)
+    # The custom prompt is sanitized first because it becomes part of the
+    # template whose length the transcript budget has to account for.
     if custom_prompt:
         custom_prompt = sanitize_ai_input(custom_prompt)
 
-    # Get the appropriate prompt
     prompt_template = get_analysis_prompt(analysis_type, custom_prompt)
 
-    # Route to appropriate AI service
     if ai_model == 'gemini':
-        return analyze_with_gemini(transcript, prompt_template)
-    else:  # default to gemma/ollama
-        return analyze_with_ollama(transcript, prompt_template)
+        # The cloud model brings its own, far larger window, so the original
+        # fixed cap still applies there.
+        return analyze_with_gemini(sanitize_ai_input(transcript), prompt_template)
+
+    if context_plan is None:
+        overhead = len(prompt_template) - len('{transcript}')
+        context_plan = plan_context_window(len(transcript or ''), overhead)
+
+    dropped = context_plan['chars_dropped']
+    marker = None
+    if dropped:
+        marker = (f"[Transcript truncated: {dropped} characters did not fit the "
+                  f"{context_plan['window']} token context window.]")
+
+    transcript = sanitize_ai_input(
+        transcript,
+        max_length=context_plan['transcript_char_budget'],
+        truncation_marker=marker
+    )
+
+    return analyze_with_ollama(transcript, prompt_template, context_plan)
 
 def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=None,
                              diarization_method='on', language=None):
@@ -847,10 +1135,115 @@ def favicon_svg():
     response.headers['Cache-Control'] = 'public, max-age=86400'
     return response
 
+def _run_transcription_job(task_id, filepath, original_filename, device_choice,
+                           language_choice, diarization_choice):
+    """Run one transcription to completion and record the outcome on the task.
+
+    This runs on a worker thread so the request that started it can return at
+    once. Holding one HTTP connection open for the length of a multi-hour job
+    meant anything that dropped an idle connection also lost the transcript,
+    even though the work had finished and the file was on disk.
+    """
+    def finish(**fields):
+        with task_lock:
+            task = active_tasks.get(task_id)
+            if task is not None:
+                task.update(fields)
+                task['finished'] = datetime.now()
+
+    try:
+        model, actual_device, actual_model = get_whisper_model(device_choice)
+
+        print(f"Processing file: {os.path.basename(filepath)} on {actual_device.upper()} "
+              f"with {actual_model} model, language: {language_choice or 'auto'}, "
+              f"diarization: {diarization_choice} (Task: {task_id})")
+
+        transcription, speaker_report = transcribe_with_speakers(
+            filepath, model, actual_device, task_id, diarization_choice, language_choice
+        )
+
+        # Format output
+        output_text = []
+        output_text.append(f"Transcription of: {original_filename}\n")
+        output_text.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        output_text.append(f"Device: {actual_device.upper()}\n")
+        output_text.append(f"Model: {actual_model}\n")
+        output_text.append(f"Language: {language_choice or 'auto-detected'}\n")
+        if speaker_report['used'] == 'on':
+            output_text.append(f"Speakers: {SPEAKER_MODEL_LABEL} "
+                               f"({SPEAKER_MODEL_REPO}, speechbrain {SPEAKER_LIB_VERSION})\n")
+        else:
+            output_text.append("Speakers: not identified\n")
+        for warning in speaker_report['warnings']:
+            output_text.append(f"Warning: {warning}\n")
+        output_text.append("=" * 80 + "\n\n")
+
+        for seg in transcription:
+            timestamp = f"[{format_timestamp(seg['start'])} - {format_timestamp(seg['end'])}]"
+            speaker = seg.get('speaker')
+            prefix = f"{timestamp} {speaker}:" if speaker else timestamp
+            output_text.append(f"{prefix} {seg['text']}\n")
+
+        # Save transcript
+        output_filename = os.path.basename(filepath).rsplit('.', 1)[0] + '_transcript.txt'
+        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.writelines(output_text)
+
+        print(f"Transcript saved: {output_filename}")
+
+        # Clean up uploaded file
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+        finish(status='done', result={
+            'success': True,
+            'transcript': ''.join(output_text),
+            'download_url': f'/download/{output_filename}',
+            'device': actual_device.upper(),
+            'model': actual_model,
+            'language': language_choice or 'auto',
+            'diarization': speaker_report['used'],
+            'diarization_requested': speaker_report['requested'],
+            'speaker_model': f"{SPEAKER_MODEL_LABEL} ({SPEAKER_MODEL_REPO}, speechbrain {SPEAKER_LIB_VERSION})",
+            'diarization_degraded': speaker_report['degraded'],
+            'diarization_warnings': speaker_report['warnings'],
+            'speakers': speaker_report['speakers'],
+            'task_id': task_id
+        })
+
+    except TranscriptionCancelled as e:
+        print(f"Transcription cancelled (Task {task_id}): {e}")
+
+        # Clean up GPU memory if using CUDA
+        if device_choice == 'cuda' and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print("GPU memory cleared after cancellation")
+
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+        finish(status='cancelled', error='Transcription cancelled by user')
+
+    except Exception as e:
+        print(f"Error processing file (Task {task_id}): {e}")
+
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+        finish(status='error', error=str(e))
+
+    finally:
+        # Always release GPU lock
+        release_gpu('transcription')
+
+
 @app.route('/upload', methods=['POST'])
 @limiter.limit("10 per hour")
 @csrf.exempt  # Exempt from CSRF for file uploads (handle via custom header)
 def upload_file():
+    """Accept a file and start transcribing it, returning a task to poll."""
     from werkzeug.utils import secure_filename
 
     # Check file size before processing
@@ -867,12 +1260,12 @@ def upload_file():
 
     if not allowed_file(file.filename):
         return jsonify({'error': 'Invalid file type'}), 400
-    
+
     # Get device selection from form
     device_choice = request.form.get('device', 'cpu').lower()
     if device_choice not in ['cuda', 'cpu']:
         device_choice = 'cpu'
-    
+
     # Get model selection from form
     language_choice = resolve_language(request.form.get('language'))
 
@@ -881,132 +1274,78 @@ def upload_file():
 
     # Generate unique task ID
     task_id = str(uuid.uuid4())
-    
-    # Register task
+
+    # Claimed here rather than on the worker so a busy service can still be
+    # refused synchronously, with no window for a second upload to slip in.
+    gpu_acquired, gpu_error = acquire_gpu('transcription')
+    if not gpu_acquired:
+        return jsonify({'error': f'GPU is busy: {gpu_error}'}), 503
+
+    try:
+        # The upload is tied to this request, so it has to be stored before the
+        # response goes out; only the transcription moves to the worker.
+        safe_original_name = secure_filename(file.filename)
+        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_original_name}"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(filepath)
+    except Exception as e:
+        release_gpu('transcription')
+        print(f"Could not store upload (Task {task_id}): {e}")
+        return jsonify({'error': f'Could not store the upload: {e}'}), 500
+
     with task_lock:
+        _sweep_finished_tasks_locked()
         active_tasks[task_id] = {
             'filename': file.filename,
             'cancelled': False,
-            'started': datetime.now()
+            'started': datetime.now(),
+            'finished': None,
+            'status': 'running',
+            'result': None,
+            'error': None
         }
-    
+
     try:
-        # Acquire GPU lock before starting transcription
-        gpu_acquired, gpu_error = acquire_gpu('transcription')
-        if not gpu_acquired:
-            return jsonify({'error': f'GPU is busy: {gpu_error}'}), 503
-
-        try:
-            # Get appropriate model
-            model, actual_device, actual_model = get_whisper_model(device_choice)
-
-            # Save uploaded file with secure filename
-            safe_original_name = secure_filename(file.filename)
-            filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_original_name}"
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
-            file.save(filepath)
-
-            print(f"Processing file: {filename} on {actual_device.upper()} with {actual_model} model, "
-                  f"language: {language_choice or 'auto'}, diarization: {diarization_choice} (Task: {task_id})")
-
-            # Transcribe with task ID, diarization method and language
-            transcription, speaker_report = transcribe_with_speakers(
-                filepath, model, actual_device, task_id, diarization_choice, language_choice
-            )
-
-            # Format output
-            output_text = []
-            output_text.append(f"Transcription of: {file.filename}\n")
-            output_text.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            output_text.append(f"Device: {actual_device.upper()}\n")
-            output_text.append(f"Model: {actual_model}\n")
-            output_text.append(f"Language: {language_choice or 'auto-detected'}\n")
-            if speaker_report['used'] == 'on':
-                output_text.append(f"Speakers: {SPEAKER_MODEL_LABEL} "
-                                   f"({SPEAKER_MODEL_REPO}, speechbrain {SPEAKER_LIB_VERSION})\n")
-            else:
-                output_text.append("Speakers: not identified\n")
-            for warning in speaker_report['warnings']:
-                output_text.append(f"Warning: {warning}\n")
-            output_text.append("=" * 80 + "\n\n")
-
-            for seg in transcription:
-                timestamp = f"[{format_timestamp(seg['start'])} - {format_timestamp(seg['end'])}]"
-                speaker = seg.get('speaker')
-                prefix = f"{timestamp} {speaker}:" if speaker else timestamp
-                output_text.append(f"{prefix} {seg['text']}\n")
-
-            # Save transcript
-            output_filename = filename.rsplit('.', 1)[0] + '_transcript.txt'
-            output_path = os.path.join(OUTPUT_FOLDER, output_filename)
-
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.writelines(output_text)
-
-            print(f"Transcript saved: {output_filename}")
-
-            # Clean up uploaded file
-            os.remove(filepath)
-
-            # Remove task from active tasks
-            with task_lock:
-                active_tasks.pop(task_id, None)
-
-            return jsonify({
-                'success': True,
-                'transcript': ''.join(output_text),
-                'download_url': f'/download/{output_filename}',
-                'device': actual_device.upper(),
-                'model': actual_model,
-                'language': language_choice or 'auto',
-                'diarization': speaker_report['used'],
-                'diarization_requested': speaker_report['requested'],
-                'speaker_model': f"{SPEAKER_MODEL_LABEL} ({SPEAKER_MODEL_REPO}, speechbrain {SPEAKER_LIB_VERSION})",
-                'diarization_degraded': speaker_report['degraded'],
-                'diarization_warnings': speaker_report['warnings'],
-                'speakers': speaker_report['speakers'],
-                'task_id': task_id
-            })
-        finally:
-            # Always release GPU lock
-            release_gpu('transcription')
-    
-    except TranscriptionCancelled as e:
-        error_msg = str(e)
-        print(f"Transcription cancelled (Task {task_id}): {error_msg}")
-
-        # Clean up GPU memory if using CUDA
-        if device_choice == 'cuda' and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("GPU memory cleared after cancellation")
-
-        # Release GPU lock
-        release_gpu('transcription')
-
-        # Clean up
-        with task_lock:
-            active_tasks.pop(task_id, None)
-
-        if 'filepath' in locals() and os.path.exists(filepath):
-            os.remove(filepath)
-
-        return jsonify({'error': 'Transcription cancelled by user', 'cancelled': True}), 499
-
+        worker = threading.Thread(
+            target=_run_transcription_job,
+            args=(task_id, filepath, file.filename, device_choice,
+                  language_choice, diarization_choice),
+            daemon=True
+        )
+        worker.start()
     except Exception as e:
-        error_msg = str(e)
-        print(f"Error processing file (Task {task_id}): {error_msg}")
-
-        # Release GPU lock
         release_gpu('transcription')
-
-        # Clean up
         with task_lock:
             active_tasks.pop(task_id, None)
-
-        if 'filepath' in locals() and os.path.exists(filepath):
+        if os.path.exists(filepath):
             os.remove(filepath)
+        return jsonify({'error': f'Could not start transcription: {e}'}), 500
 
-        return jsonify({'error': error_msg}), 500
+    return jsonify({'task_id': task_id, 'status': 'running'}), 202
+
+
+@app.route('/task/<task_id>', methods=['GET'])
+@limiter.exempt  # Polled every couple of seconds while a job runs
+def task_status(task_id):
+    """Report on a transcription started by /upload."""
+    with task_lock:
+        task = active_tasks.get(task_id)
+        if task is None:
+            return jsonify({'error': 'Task not found or expired'}), 404
+
+        payload = {
+            'task_id': task_id,
+            'status': task['status'],
+            'filename': task['filename'],
+            'elapsed_seconds': round((datetime.now() - task['started']).total_seconds(), 1)
+        }
+        if task['status'] == 'done':
+            payload['result'] = task['result']
+        elif task['error']:
+            payload['error'] = task['error']
+
+    return jsonify(payload)
+
 
 @app.route('/download/<filename>')
 def download_file(filename):
@@ -1031,15 +1370,21 @@ def download_file(filename):
     return jsonify({'error': 'File not found'}), 404
 
 @app.route('/cancel/<task_id>', methods=['POST'])
+@csrf.exempt  # Exempt from CSRF for API endpoint, as /upload and /ai-analysis are
 def cancel_task(task_id):
     """Cancel an active transcription task"""
     with task_lock:
-        if task_id in active_tasks:
-            active_tasks[task_id]['cancelled'] = True
-            print(f"Task {task_id} marked for cancellation")
-            return jsonify({'success': True, 'message': 'Task cancelled'})
-        else:
+        task = active_tasks.get(task_id)
+        if task is None:
             return jsonify({'error': 'Task not found or already completed'}), 404
+        # A finished task keeps its entry so the result can be collected, so
+        # the status decides whether there is anything left to cancel.
+        if task['status'] != 'running':
+            return jsonify({'error': f'Task already {task["status"]}'}), 409
+        task['cancelled'] = True
+
+    print(f"Task {task_id} marked for cancellation")
+    return jsonify({'success': True, 'message': 'Task cancelled'})
 
 @app.route('/ai-analysis', methods=['POST'])
 @limiter.limit("20 per hour")
@@ -1076,20 +1421,44 @@ def ai_analysis():
                 'error': 'Gemini API key not configured. Please set GEMINI_API_KEY environment variable or use Local Gemma 4.'
             }), 400
 
+        # Size the local context window before anything else, so a transcript
+        # that cannot fit is refused while the GPU lock is still free rather
+        # than after it has been taken.
+        context_plan = None
+        if ai_model == 'gemma':
+            context_plan = plan_transcript_analysis(transcript, analysis_type, custom_prompt)
+
+            if not context_plan['fits'] and data.get('confirm_truncation') is not True:
+                limit_note = context_plan['limit_reason']
+                return jsonify({
+                    'error': (
+                        f"This transcript needs roughly "
+                        f"{context_plan['estimated_prompt_tokens']} tokens, more than the "
+                        f"{context_plan['window']} token window allowed by {limit_note}. "
+                        f"About {context_plan['chars_dropped']} characters would be dropped "
+                        "from the start of the transcript. Confirm to analyse the rest anyway, "
+                        "or use Cloud Gemini, which has a much larger window."
+                    ),
+                    'code': 'transcript_exceeds_context',
+                    'context': context_plan
+                }), 409
+
         # Acquire GPU lock before starting AI analysis
         gpu_acquired, gpu_error = acquire_gpu('ai_analysis')
         if not gpu_acquired:
             return jsonify({'error': f'GPU is busy: {gpu_error}'}), 503
 
         try:
-            print(f"Starting AI analysis: type={analysis_type}, model={ai_model}")
+            print(f"Starting AI analysis: type={analysis_type}, model={ai_model}"
+                  + (f", num_ctx={context_plan['window']}" if context_plan else ""))
 
             # Perform analysis
             analysis_result, error = perform_ai_analysis(
                 transcript,
                 analysis_type,
                 ai_model,
-                custom_prompt
+                custom_prompt,
+                context_plan
             )
 
             if error:
@@ -1102,7 +1471,8 @@ def ai_analysis():
                 'success': True,
                 'analysis': analysis_result,
                 'model_used': ai_model,
-                'analysis_type': analysis_type
+                'analysis_type': analysis_type,
+                'context': context_plan
             })
 
         finally:
@@ -1184,7 +1554,25 @@ def health():
             'ollama_url': OLLAMA_BASE_URL,
             'ollama_available': False,
             'gemini_available': bool(GEMINI_API_KEY),
-            'gemma_model': GEMMA_MODEL_NAME
+            'gemma_model': GEMMA_MODEL_NAME,
+            # Context sizing, so the page can estimate a transcript's fit
+            # before submitting it. context_limit stays null until Ollama
+            # confirms it has the model.
+            'context_limit': None,
+            'context_floor': OLLAMA_NUM_CTX_MIN,
+            'context_ceiling': OLLAMA_NUM_CTX_MAX or None,
+            'context_override': OLLAMA_NUM_CTX or None,
+            'context_ladder': list(CONTEXT_LADDER),
+            'reserved_output_tokens': OLLAMA_NUM_PREDICT,
+            'headroom_tokens': CONTEXT_HEADROOM_TOKENS,
+            'chars_per_token': OLLAMA_CHARS_PER_TOKEN,
+            # Worst case across the analysis types. The template and safety
+            # prefix share the window with the transcript, so the page has to
+            # account for them or its warning is wrong at the boundary.
+            'prompt_overhead_chars': max(
+                len(get_analysis_prompt(kind)) - len('{transcript}')
+                for kind in ('summarize', 'insights', 'custom')
+            )
         }
 
         # Check Ollama availability
@@ -1203,6 +1591,9 @@ def health():
                 health_info['ai_services']['ollama_model_available'] = (
                     normalise(GEMMA_MODEL_NAME) in {normalise(n) for n in names}
                 )
+
+                if health_info['ai_services']['ollama_model_available']:
+                    health_info['ai_services']['context_limit'] = get_model_context_limit()
         except:
             pass
         
