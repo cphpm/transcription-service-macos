@@ -49,22 +49,23 @@ running yet.
 
 ### Memory
 
-Transcription holds the whole recording in memory, so what it needs grows with
-the length of the audio rather than the size of the file. Docker Desktop also
-hands containers only the slice of RAM you allocate to it, not everything the
-machine has.
+Transcription holds the whole recording in memory, so requirements scale with
+the audio's length rather than the file's size. Docker Desktop also caps
+containers at whatever RAM you allocate to it on macOS, not the machine's full
+amount.
 
-On a Mac, 16 GB of RAM with 10 GB allocated to Docker is the recommendation.
-Raise the allocation in Docker Desktop under **Settings, Resources, Advanced**:
-drag the **Memory limit** slider to 10 GB and apply the change, which restarts
-the engine.
+- **Minimum:** 16 GB of RAM. The default 8 GB Docker allocation on macOS covers
+  typical meeting-length audio. If you experience issues with multi-hour audio,
+  try raising it to 10-11 GB.
+- **Recommended:** 24 GB of RAM, with the Docker allocation raised to around
+  12 GB.
 
-The default 8 GB allocation is not enough for long recordings. A three-hour
-file exhausts it, and because the container restarts itself the browser shows
-nothing more useful than a network error.
+To raise the allocation, go to Docker Desktop's **Settings > Resources >
+Advanced**, drag the **Memory limit** slider to the new value, and apply. This
+restarts the engine.
 
-Shorter recordings need far less. An 8 GB allocation copes with typical
-meeting-length audio; it is multi-hour material that runs it out.
+Because the container restarts itself when memory runs out, the browser shows
+nothing more useful than a network error rather than a clear warning.
 
 ## Quick Start
 
