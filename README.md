@@ -71,8 +71,8 @@ meeting-length audio; it is multi-hour material that runs it out.
 Clone the repository and start it:
 
 ```bash
-git clone https://github.com/cphpm/transcription-service-macos.git
-cd transcription-service-macos
+git clone https://github.com/cphpm/transcription-service.git
+cd transcription-service
 docker compose up --build
 ```
 
@@ -81,7 +81,7 @@ Then open http://localhost:8080.
 These are the same three commands on macOS, Windows and Linux. On Windows they
 work in PowerShell, Command Prompt, Git Bash or WSL alike. The repository is
 public, so the clone needs no GitHub account, and every command in this README is
-run from the `transcription-service-macos` directory that clone creates.
+run from the `transcription-service` directory that clone creates.
 
 There is no configuration step. Every setting has a working default, so nothing
 needs to be created or filled in before the first run. Add `-d` to run it in the
