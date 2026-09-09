@@ -666,6 +666,14 @@
             text-shadow: 0 1px 2px rgba(255,255,255,0.5);
         }
 
+        .progress-detail {
+            margin-top: 10px;
+            min-height: 1.2em;
+            font-size: 0.9em;
+            color: var(--color-text-secondary);
+            font-variant-numeric: tabular-nums;
+        }
+
         .progress-stages {
             margin-top: 16px;
             display: grid;
@@ -697,6 +705,12 @@
             background: linear-gradient(135deg, rgba(20, 184, 166, 0.2) 0%, rgba(20, 184, 166, 0.15) 100%);
             color: #5EEAD4;
             border-color: var(--color-accent-teal);
+        }
+
+        /* A step the server will not run for this job, such as Speakers with
+           identification off. Never lit, and not painted as completed either. */
+        .stage.skipped {
+            opacity: 0.45;
         }
 
         /* Transcript */
@@ -1522,14 +1536,15 @@
                     <div class="progress-bar-inner" id="progressBar" style="width: 0%"></div>
                     <span class="progress-percentage" id="progressPercentage">0%</span>
                 </div>
+                <div class="progress-detail" id="progressDetail"></div>
                 <div class="progress-stages">
                     <div class="stage" id="stage1">
                         <span>📤</span>
                         <span>Uploading</span>
                     </div>
                     <div class="stage" id="stage2">
-                        <span>🎵</span>
-                        <span>Processing</span>
+                        <span>⚙️</span>
+                        <span>Loading model</span>
                     </div>
                     <div class="stage" id="stage3">
                         <span>📝</span>
@@ -1666,6 +1681,7 @@
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
         const progressPercentage = document.getElementById('progressPercentage');
+        const progressDetail = document.getElementById('progressDetail');
         const timerDisplay = document.getElementById('timerDisplay');
         const cancelBtn = document.getElementById('cancelBtn');
 
@@ -1674,7 +1690,7 @@
         let transcriptText = '';
         let timerInterval = null;
         let startTime = null;
-        let estimatedDuration = 0;
+        let speakersSkipped = false;
         let abortController = null;
         let currentTaskId = null;
 
@@ -2187,6 +2203,32 @@
         window.addEventListener('DOMContentLoaded', loadSystemInfo);
 
         // Cancel button handler
+        // Send the file and resolve with the accepted task. fetch() cannot report
+        // upload progress, so this uses XMLHttpRequest and wires the abort signal
+        // through by hand.
+        function uploadWithProgress(formData, signal, onProgress) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/upload');
+                xhr.upload.onprogress = event => {
+                    if (event.lengthComputable) onProgress(event.loaded / event.total);
+                };
+                xhr.onload = () => {
+                    let body = {};
+                    try { body = JSON.parse(xhr.responseText); } catch (e) { /* not JSON, e.g. a proxy error page */ }
+                    if (xhr.status >= 200 && xhr.status < 300 && body.task_id) {
+                        resolve(body);
+                    } else {
+                        reject(new Error(body.error || `Could not start transcription (HTTP ${xhr.status})`));
+                    }
+                };
+                xhr.onerror = () => reject(new Error('Could not reach the server'));
+                xhr.onabort = () => reject(new DOMException('Cancelled', 'AbortError'));
+                if (signal) signal.addEventListener('abort', () => xhr.abort());
+                xhr.send(formData);
+            });
+        }
+
         // Poll a started transcription until it finishes. Resolves with the
         // result payload, or throws describing what went wrong.
         async function awaitTranscription(taskId, signal) {
@@ -2215,6 +2257,7 @@
 
                 const data = await response.json();
 
+                if (data.status === 'running') showServerProgress(data);
                 if (data.status === 'done') return data.result;
                 if (data.status === 'cancelled') throw new Error('Transcription cancelled');
                 if (data.status === 'error') throw new Error(data.error || 'Transcription failed');
@@ -2242,11 +2285,11 @@
         });
 
         const stages = [
-            { id: 'stage1', duration: 5, name: 'Uploading' },
-            { id: 'stage2', duration: 10, name: 'Processing Audio' },
-            { id: 'stage3', duration: 70, name: 'Transcribing' },
-            { id: 'stage4', duration: 10, name: 'Detecting Speakers' },
-            { id: 'stage5', duration: 5, name: 'Complete' }
+            { id: 'stage1', name: 'Uploading' },
+            { id: 'stage2', name: 'Loading model' },
+            { id: 'stage3', name: 'Transcribing' },
+            { id: 'stage4', name: 'Detecting Speakers' },
+            { id: 'stage5', name: 'Complete' }
         ];
 
         function startTimer() {
@@ -2268,87 +2311,173 @@
             timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         }
 
-        function estimateProcessingTime(fileSize) {
-            const fileSizeMB = fileSize / (1024 * 1024);
-            return Math.max(30, Math.min(fileSizeMB * 6, 300));
+        // Everything below follows what the server reports through /task/<id>:
+        // which step it is on, how far into the recording that step has got, and
+        // how long the step has been running. Nothing is guessed from the file
+        // size or the clock.
+
+        // Share of the bar given to each step. Transcription dominates; the
+        // others are small fixed slices so the bar still moves through them.
+        function progressSpans() {
+            const transcribingEnd = speakersSkipped ? 0.98 : 0.90;
+            return {
+                uploading: [0, 0.03],
+                uploaded: [0.03, 0.05],
+                loading_model: [0.03, 0.05],
+                transcribing: [0.05, transcribingEnd],
+                speakers: [transcribingEnd, 0.98],
+                saving: [0.98, 1]
+            };
         }
 
-        function startProgress() {
+        function renderProgress(fraction, detail) {
+            const percent = Math.max(0, Math.min(100, Math.floor(fraction * 100)));
+            progressBar.style.width = percent + '%';
+            progressPercentage.textContent = percent + '%';
+            progressDetail.textContent = detail || '';
+        }
+
+        function startProgress(skipSpeakers) {
+            speakersSkipped = Boolean(skipSpeakers);
             progressContainer.classList.add('show');
-            progressBar.style.width = '0%';
-            progressPercentage.textContent = '0%';
+            renderProgress(0, 'Uploading');
 
             stages.forEach(stage => {
                 const element = document.getElementById(stage.id);
-                element.classList.remove('active', 'completed');
+                element.classList.remove('active', 'completed', 'skipped');
             });
 
-            document.getElementById('stage1').classList.add('active');
-            animateProgress();
+            if (speakersSkipped) {
+                document.getElementById('stage4').classList.add('skipped');
+            }
+
+            setStage('stage1');
         }
 
-        function animateProgress() {
-            let progress = 0;
-            let currentStageIndex = 0;
-            const elapsed = () => (Date.now() - startTime) / 1000;
+        function setUploadProgress(fraction) {
+            const [from, to] = progressSpans().uploading;
+            renderProgress(from + (to - from) * fraction, `Uploading ${Math.round(fraction * 100)}%`);
+        }
 
-            const progressInterval = setInterval(() => {
-                const elapsedTime = elapsed();
-                const expectedProgress = Math.min((elapsedTime / estimatedDuration) * 100 * 0.8, 95);
+        // Light one tile, mark everything before it done, clear everything after.
+        function setStage(id) {
+            let index = stages.findIndex(stage => stage.id === id);
+            if (index < 0) return;
 
-                if (progress < expectedProgress) {
-                    progress = Math.min(progress + 0.5, expectedProgress);
+            // A skipped tile is never lit; stay on the one before it.
+            while (index > 0 && document.getElementById(stages[index].id).classList.contains('skipped')) {
+                index -= 1;
+            }
+
+            stages.forEach((stage, i) => {
+                const element = document.getElementById(stage.id);
+                element.classList.remove('active', 'completed');
+                if (i < index && !element.classList.contains('skipped')) {
+                    element.classList.add('completed');
+                } else if (i === index) {
+                    element.classList.add('active');
                 }
+            });
+        }
 
-                progressBar.style.width = progress + '%';
-                progressPercentage.textContent = Math.floor(progress) + '%';
+        // What the server calls each step, and which tile shows it. Saving
+        // has no tile of its own; it stays on the last step that ran.
+        const stageForServerStep = {
+            uploaded: 'stage2',
+            loading_model: 'stage2',
+            transcribing: 'stage3',
+            speakers: 'stage4',
+            saving: 'stage4'
+        };
 
-                let cumulativeDuration = 0;
-                for (let i = 0; i < stages.length; i++) {
-                    cumulativeDuration += stages[i].duration;
-                    const stageProgress = (cumulativeDuration / 100) * 100;
-                    const element = document.getElementById(stages[i].id);
+        // Positions are whole minutes. Whisper reports progress one segment at
+        // a time, and on unbroken speech a segment can be half a minute of
+        // audio, so second-level precision only made those jumps stand out.
+        // Under a minute of audio there is nothing worth showing.
+        function formatPosition(doneSeconds, totalSeconds) {
+            const total = Math.round(totalSeconds / 60);
+            if (total < 1) return '';
+            const done = Math.min(Math.floor(doneSeconds / 60), total);
+            return `${done} of ${total} minute${total === 1 ? '' : 's'}`;
+        }
 
-                    if (progress < stageProgress) {
-                        if (i !== currentStageIndex) {
-                            for (let j = 0; j < i; j++) {
-                                const prevElement = document.getElementById(stages[j].id);
-                                prevElement.classList.remove('active');
-                                prevElement.classList.add('completed');
-                            }
-                            element.classList.add('active');
-                            currentStageIndex = i;
-                        }
-                        break;
+        function formatRemaining(seconds) {
+            if (seconds < 45) return 'under a minute left';
+            const minutes = Math.round(seconds / 60);
+            if (minutes < 60) return `about ${minutes} minute${minutes === 1 ? '' : 's'} left`;
+            return `about ${Math.floor(minutes / 60)} h ${minutes % 60} min left`;
+        }
+
+        // Time left, from the rate this job has managed so far in its current
+        // step. Speaker identification, when it is still ahead, has taken about
+        // a tenth of the transcription time.
+        function remainingSeconds(data) {
+            const done = data.audio_done, total = data.audio_total, elapsed = data.stage_elapsed_seconds;
+            if (!(total > 0) || !(done > 0) || !(elapsed > 0)) return null;
+            // The first segment carries the decoding overhead, so wait a little.
+            if (done / total < 0.02) return null;
+            const rate = done / elapsed;
+            let remaining = (total - done) / rate;
+            if (data.stage === 'transcribing' && !speakersSkipped) {
+                remaining += (total / rate) * 0.1;
+            }
+            return remaining;
+        }
+
+        function showServerProgress(data) {
+            const step = data.stage;
+            const tile = stageForServerStep[step];
+            if (tile) setStage(tile);
+
+            const span = progressSpans()[step];
+            if (!span) return;
+
+            const done = data.audio_done, total = data.audio_total;
+            let fraction = 0;
+            let detail = '';
+
+            if (step === 'transcribing' || step === 'speakers') {
+                if (total > 0) {
+                    fraction = Math.min(done / total, 1);
+                    const position = formatPosition(done, total);
+                    if (step === 'transcribing') {
+                        detail = position ? `${position} transcribed` : 'Transcribing';
+                    } else {
+                        detail = position ? `Identifying speakers, ${position}` : 'Identifying speakers';
                     }
+                    const remaining = remainingSeconds(data);
+                    if (remaining !== null) detail += ` · ${formatRemaining(remaining)}`;
+                } else {
+                    detail = step === 'transcribing' ? 'Reading the audio' : 'Identifying speakers';
                 }
-            }, 100);
+            } else if (step === 'saving') {
+                detail = 'Saving the transcript';
+            } else {
+                detail = 'Loading the model';
+            }
 
-            window.progressInterval = progressInterval;
+            renderProgress(span[0] + (span[1] - span[0]) * fraction, detail);
         }
 
         function completeProgress() {
-            if (window.progressInterval) clearInterval(window.progressInterval);
-
-            progressBar.style.width = '100%';
-            progressPercentage.textContent = '100%';
+            renderProgress(1, '');
 
             stages.forEach(stage => {
                 const element = document.getElementById(stage.id);
                 element.classList.remove('active');
-                element.classList.add('completed');
+                if (!element.classList.contains('skipped')) {
+                    element.classList.add('completed');
+                }
             });
         }
 
         function resetProgress() {
-            if (window.progressInterval) clearInterval(window.progressInterval);
             progressContainer.classList.remove('show');
-            progressBar.style.width = '0%';
-            progressPercentage.textContent = '0%';
+            renderProgress(0, '');
 
             stages.forEach(stage => {
                 const element = document.getElementById(stage.id);
-                element.classList.remove('active', 'completed');
+                element.classList.remove('active', 'completed', 'skipped');
             });
         }
 
@@ -2559,17 +2688,6 @@
             formData.append('language', document.getElementById('languageSelect').value);
             formData.append('diarization', selectedDiarization);
 
-            const baseTime = estimateProcessingTime(selectedFile.size);
-            let timeMultiplier = selectedDevice === 'cpu' ? 8 : 1;
-
-            // Measured for large-v3-turbo on a 63s clip.
-            timeMultiplier *= 0.23;
-
-            // Adjust estimate based on diarization method
-            const diarizationMultiplier = selectedDiarization === 'on' ? 1.3 : 1;
-
-            estimatedDuration = baseTime * timeMultiplier * diarizationMultiplier;
-
             const deviceName = selectedDevice === 'cuda' ? 'GPU' : 'CPU';
             const modelName = 'Whisper (large-v3-turbo)';
             status.className = 'status processing show';
@@ -2580,22 +2698,16 @@
 
             abortController = new AbortController();
             startTimer();
-            startProgress();
+            startProgress(selectedDiarization === 'off');
 
             try {
-                const started = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData,
-                    signal: abortController.signal
-                });
-
-                const accepted = await started.json();
-
-                if (!started.ok || !accepted.task_id) {
-                    throw new Error(accepted.error || 'Could not start transcription');
-                }
+                const accepted = await uploadWithProgress(formData, abortController.signal, setUploadProgress);
 
                 currentTaskId = accepted.task_id;
+
+                // The server has the whole file once this request returns, so
+                // Uploading is over whatever the estimate says.
+                setStage('stage2');
 
                 // The upload request returns as soon as the file is stored, and
                 // the transcript is collected by polling. Holding one connection

@@ -106,6 +106,34 @@ def _sweep_finished_tasks_locked():
     for tid in stale:
         active_tasks.pop(tid, None)
 
+
+def set_stage(task_id, stage):
+    """Record which step a running task is on, for the page to show.
+
+    Position within the step starts over, and the step's start time is kept
+    so the page can work out a rate from what has been done so far.
+    """
+    if not task_id:
+        return
+    with task_lock:
+        task = active_tasks.get(task_id)
+        if task is not None:
+            task['stage'] = stage
+            task['stage_started'] = datetime.now()
+            task['audio_done'] = 0.0
+
+
+def set_progress(task_id, audio_done, audio_total=None):
+    """Record how far into the recording the current step has got, in seconds."""
+    if not task_id:
+        return
+    with task_lock:
+        task = active_tasks.get(task_id)
+        if task is not None:
+            task['audio_done'] = float(audio_done)
+            if audio_total is not None:
+                task['audio_total'] = float(audio_total)
+
 class TranscriptionCancelled(Exception):
     """Custom exception for cancelled transcription"""
     pass
@@ -445,7 +473,7 @@ def apply_labels_to_segments(segments, scored_indices, labels):
     return segments
 
 
-def extract_speaker_embeddings(audio_path, segments, device='cpu'):
+def extract_speaker_embeddings(audio_path, segments, device='cpu', task_id=None):
     """
     Extract neural speaker embeddings using SpeechBrain ECAPA-TDNN
     and cluster them.
@@ -474,6 +502,7 @@ def extract_speaker_embeddings(audio_path, segments, device='cpu'):
         scored_indices = []
 
         for index, seg in enumerate(segments):
+            set_progress(task_id, seg['end'])
             start_sample = int(seg['start'] * sample_rate)
             end_sample = int(seg['end'] * sample_rate)
 
@@ -958,6 +987,9 @@ def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=Non
                 condition_on_previous_text=False
             )
             
+            # Nothing is decoded yet, but the recording's length is already known.
+            set_progress(task_id, 0.0, info.duration)
+
             # Convert generator to list (this allows us to check cancellation)
             segments_list = []
             for segment in segments:
@@ -965,6 +997,8 @@ def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=Non
                     transcription_result['error'] = "Cancelled during transcription"
                     return
                 segments_list.append(segment)
+                # Segments are decoded on demand, so each one's end is how far in we are.
+                set_progress(task_id, segment.end)
             
             transcription_result['segments'] = segments_list
             transcription_result['info'] = info
@@ -972,6 +1006,7 @@ def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=Non
             transcription_result['error'] = str(e)
     
     # Run transcription in thread
+    set_stage(task_id, 'transcribing')
     transcription_thread = threading.Thread(target=do_transcription)
     transcription_thread.daemon = True
     current_thread = transcription_thread
@@ -1038,6 +1073,7 @@ def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=Non
         report['speakers'] = 0
         return transcription, report
 
+    set_stage(task_id, 'speakers')
     print(f"Identifying speakers with {SPEAKER_MODEL_LABEL}...")
 
     if device_name == 'cuda':
@@ -1048,7 +1084,7 @@ def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=Non
     if not SPEECHBRAIN_AVAILABLE:
         report['warnings'].append(f"{SPEAKER_MODEL_LABEL} is not installed")
     else:
-        result = extract_speaker_embeddings(audio_path, transcription, device_name)
+        result = extract_speaker_embeddings(audio_path, transcription, device_name, task_id)
         if result is None:
             report['warnings'].append(f"{SPEAKER_MODEL_LABEL} could not process this audio")
 
@@ -1152,6 +1188,7 @@ def _run_transcription_job(task_id, filepath, original_filename, device_choice,
                 task['finished'] = datetime.now()
 
     try:
+        set_stage(task_id, 'loading_model')
         model, actual_device, actual_model = get_whisper_model(device_choice)
 
         print(f"Processing file: {os.path.basename(filepath)} on {actual_device.upper()} "
@@ -1161,6 +1198,8 @@ def _run_transcription_job(task_id, filepath, original_filename, device_choice,
         transcription, speaker_report = transcribe_with_speakers(
             filepath, model, actual_device, task_id, diarization_choice, language_choice
         )
+
+        set_stage(task_id, 'saving')
 
         # Format output
         output_text = []
@@ -1301,6 +1340,10 @@ def upload_file():
             'started': datetime.now(),
             'finished': None,
             'status': 'running',
+            'stage': 'uploaded',
+            'stage_started': datetime.now(),
+            'audio_done': 0.0,
+            'audio_total': 0.0,
             'result': None,
             'error': None
         }
@@ -1336,6 +1379,11 @@ def task_status(task_id):
         payload = {
             'task_id': task_id,
             'status': task['status'],
+            'stage': task.get('stage'),
+            'stage_elapsed_seconds': round(
+                (datetime.now() - task.get('stage_started', task['started'])).total_seconds(), 1),
+            'audio_done': round(task.get('audio_done', 0.0), 1),
+            'audio_total': round(task.get('audio_total', 0.0), 1),
             'filename': task['filename'],
             'elapsed_seconds': round((datetime.now() - task['started']).total_seconds(), 1)
         }
