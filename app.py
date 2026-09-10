@@ -17,6 +17,10 @@ import ctypes
 import requests
 import json
 import time
+import socket
+import http.client
+import re
+from urllib.parse import urlparse
 try:
     from google import genai
     from google.genai import types
@@ -91,6 +95,8 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Track active transcription tasks
 active_tasks = {}
+# Analyses are tracked the same way: started, polled for their text, cancelled by id.
+analysis_tasks = {}
 task_lock = threading.Lock()
 
 # A finished task keeps its result until the page collects it. Without a sweep
@@ -101,10 +107,11 @@ FINISHED_TASK_TTL_SECONDS = 3600
 def _sweep_finished_tasks_locked():
     """Drop finished tasks nobody collected. The caller must hold task_lock."""
     cutoff = datetime.now() - timedelta(seconds=FINISHED_TASK_TTL_SECONDS)
-    stale = [tid for tid, task in active_tasks.items()
-             if task.get('finished') and task['finished'] < cutoff]
-    for tid in stale:
-        active_tasks.pop(tid, None)
+    for registry in (active_tasks, analysis_tasks):
+        stale = [tid for tid, task in registry.items()
+                 if task.get('finished') and task['finished'] < cutoff]
+        for tid in stale:
+            registry.pop(tid, None)
 
 
 def set_stage(task_id, stage):
@@ -138,84 +145,252 @@ class TranscriptionCancelled(Exception):
     """Custom exception for cancelled transcription"""
     pass
 
+class AnalysisCancelled(Exception):
+    """Raised inside an analysis once its task has been cancelled."""
+    pass
+
 # GPU state tracking for preventing concurrent GPU operations
 transcription_active = False
 ai_analysis_active = False
 gpu_lock = threading.Lock()
 
-# AI Configuration
-OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://ollama:11434')
+# ---- Settings ---------------------------------------------------------------
+# Everything a user may want to change is listed here with its default, and is
+# edited in the page under Settings rather than in a .env file. Values are
+# layered: these defaults, then the environment (a .env file or the compose
+# file, for deployments that prefer it), then whatever was saved from the page,
+# which wins because it is the most deliberate choice. Saved values live in a
+# JSON file on a bind mount, so they outlive the container being stopped,
+# removed or rebuilt.
 
-# A cold load of a multi-gigabyte model plus generation over a long transcript
-# comfortably exceeds two minutes, which is what the old limit allowed.
-OLLAMA_TIMEOUT_SECONDS = int(os.getenv('OLLAMA_TIMEOUT_SECONDS', '600'))
+SETTINGS_PATH = os.getenv(
+    'SETTINGS_PATH',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'settings.json')
+)
 
-# Keep the model resident between analyses so only the first one pays the load.
-OLLAMA_KEEP_ALIVE = os.getenv('OLLAMA_KEEP_ALIVE', '30m')
+SETTINGS_SPEC = [
+    {'key': 'WHISPER_LANGUAGE', 'group': 'Transcription', 'type': 'language', 'default': 'auto',
+     'label': 'Default language',
+     'help': "Preselected for new transcriptions. Auto detects the language per file; "
+             "naming it is more reliable on short or noisy audio."},
+    {'key': 'OLLAMA_BASE_URL', 'group': 'Local model', 'type': 'url',
+     'default': 'http://host.docker.internal:11434',
+     'label': 'Ollama address',
+     'help': "host.docker.internal reaches an Ollama on this machine from inside Docker. "
+             "Use http://localhost:11434 when running the app outside Docker."},
+    {'key': 'GEMMA_MODEL_NAME', 'group': 'Local model', 'type': 'text', 'default': 'gemma4:e4b',
+     'label': 'Model',
+     'help': "The Ollama tag to analyse with. Pull it first, for example: ollama pull gemma4:e4b"},
+    {'key': 'OLLAMA_KEEP_ALIVE', 'group': 'Local model', 'type': 'duration', 'default': '0',
+     'label': 'Keep the model loaded',
+     'help': "How long Ollama keeps the model in memory after an analysis. 0 unloads it at "
+             "once so the memory is free for the next transcription; a duration such as 30m "
+             "keeps it ready so only the first analysis pays the load."},
+    {'key': 'OLLAMA_TIMEOUT_SECONDS', 'group': 'Local model', 'type': 'int', 'default': 600, 'min': 1,
+     'label': 'Timeout, seconds',
+     'help': "How long to wait for an analysis. A cold model load costs about 35 seconds and "
+             "a 45-minute transcript about 90 more."},
+    {'key': 'GEMINI_API_KEY', 'group': 'Cloud Gemini', 'type': 'secret', 'default': '',
+     'label': 'API key',
+     'help': "From https://aistudio.google.com/app/apikey. Kept on this machine only, and used "
+             "only when you pick Cloud Gemini."},
+    {'key': 'GEMINI_MODEL_NAME', 'group': 'Cloud Gemini', 'type': 'text',
+     'default': 'gemini-flash-latest', 'label': 'Model',
+     'help': "The Gemini model id. gemini-flash-latest follows Google's newest Flash release "
+             "and changes with it; a specific id such as gemini-3.5-flash pins one."},
+    {'key': 'OLLAMA_NUM_CTX_MIN', 'group': 'Advanced', 'type': 'int', 'default': 32768, 'min': 1,
+     'label': 'Smallest context window',
+     'help': "Floor for the window asked of Ollama, in tokens. Anything smaller truncates a "
+             "transcript of real length."},
+    {'key': 'OLLAMA_NUM_CTX_MAX', 'group': 'Advanced', 'type': 'int', 'default': 0, 'min': 0,
+     'optional': True, 'label': 'Largest context window',
+     'help': "Ceiling in tokens, as a guard on memory: a big window means a big key-value "
+             "cache. Empty allows whatever the model reports it supports."},
+    {'key': 'OLLAMA_NUM_CTX', 'group': 'Advanced', 'type': 'int', 'default': 0, 'min': 0,
+     'optional': True, 'label': 'Fixed context window',
+     'help': "Turns automatic sizing off and always asks for this many tokens. Empty keeps "
+             "sizing automatic."},
+    {'key': 'OLLAMA_NUM_PREDICT', 'group': 'Advanced', 'type': 'int', 'default': 2000, 'min': 1,
+     'label': 'Tokens reserved for the answer',
+     'help': "Prompt and answer share the window; this much is kept back for the answer."},
+    {'key': 'OLLAMA_CHARS_PER_TOKEN', 'group': 'Advanced', 'type': 'float', 'default': 3.0,
+     'label': 'Characters per token',
+     'help': "Used to estimate a transcript with no tokeniser present. Lower is more "
+             "cautious; 3.0 suits Danish and mixed-language transcripts."},
+]
+
+# The values in force. Filled by apply_settings().
+current_settings = {}
 
 
-def _positive_int_env(name, default):
-    """Read a positive integer setting, falling back when unset or unparseable."""
-    raw = (os.getenv(name) or '').strip()
-    if not raw:
-        return default
+def coerce_setting(spec, raw):
+    """Turn a submitted or environment value into the setting's own type.
+
+    Returns (value, None) when it is acceptable, else (None, message) with a
+    message meant for the person who typed it.
+    """
+    kind = spec['type']
+    text = ('' if raw is None else str(raw)).strip()
+
+    if kind == 'secret':
+        return text, None
+
+    if kind == 'int':
+        if not text:
+            if spec.get('optional'):
+                return 0, None
+            return None, 'Enter a whole number.'
+        try:
+            value = int(text)
+        except ValueError:
+            return None, 'Enter a whole number.'
+        if value < spec.get('min', 0):
+            return None, f"Must be at least {spec.get('min', 0)}."
+        return value, None
+
+    if kind == 'float':
+        try:
+            value = float(text)
+        except ValueError:
+            return None, 'Enter a number.'
+        if not value > 0:
+            return None, 'Must be greater than zero.'
+        return value, None
+
+    if kind == 'duration':
+        # What Ollama accepts: seconds as a number, or a Go-style duration.
+        if not text or not re.fullmatch(r'-?\d+|(\d+h)?(\d+m)?(\d+s)?', text):
+            return None, 'Use 0, a number of seconds, or a duration such as 30m or 1h.'
+        return text, None
+
+    if kind == 'url':
+        parsed = urlparse(text)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+            return None, 'Enter a full address such as http://host.docker.internal:11434.'
+        return text.rstrip('/'), None
+
+    if kind == 'language':
+        from faster_whisper.tokenizer import _LANGUAGE_CODES
+        code = text.lower() or 'auto'
+        if code != 'auto' and code not in _LANGUAGE_CODES:
+            return None, "Use auto or a language code Whisper knows, such as en or da."
+        return code, None
+
+    if not text:
+        return None, 'This cannot be empty.'
+    return text, None
+
+
+def _read_saved_settings():
     try:
-        value = int(raw)
-    except ValueError:
-        print(f"Ignoring {name}={raw!r}: not an integer. Using {default}.")
-        return default
-    if value < 0:
-        print(f"Ignoring {name}={raw!r}: must not be negative. Using {default}.")
-        return default
-    return value
+        with open(SETTINGS_PATH, encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"Ignoring unreadable settings file {SETTINGS_PATH}: {e}")
+        return {}
 
 
-def _positive_float_env(name, default):
-    """Read a positive float setting, falling back when unset or unparseable."""
-    raw = (os.getenv(name) or '').strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        print(f"Ignoring {name}={raw!r}: not a number. Using {default}.")
-        return default
-    if value <= 0:
-        print(f"Ignoring {name}={raw!r}: must be positive. Using {default}.")
-        return default
-    return value
+def load_settings():
+    """Defaults, then the environment, then the saved file."""
+    saved = _read_saved_settings()
+    values = {}
+    for spec in SETTINGS_SPEC:
+        key = spec['key']
+        value = spec['default']
+
+        raw = os.getenv(key)
+        if raw is not None and raw.strip():
+            candidate, error = coerce_setting(spec, raw)
+            if error:
+                print(f"Ignoring {key}={raw!r} from the environment: {error}")
+            else:
+                value = candidate
+
+        if key in saved:
+            candidate, error = coerce_setting(spec, saved[key])
+            if error:
+                print(f"Ignoring saved {key}={saved[key]!r}: {error}")
+            else:
+                value = candidate
+
+        values[key] = value
+    return values
 
 
-# Ollama drops the front of a prompt that exceeds the context window instead of
-# erroring, so an unsized window means a long transcript is analysed from its
-# tail with nothing to show for it. The window is therefore chosen per request
-# from the transcript's own size.
+def save_settings(values):
+    """Write the full set, replacing the file in one step."""
+    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+    tmp_path = SETTINGS_PATH + '.tmp'
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(values, f, indent=2, sort_keys=True)
+    os.replace(tmp_path, SETTINGS_PATH)
 
-# Floor for the window. Anything smaller truncates a transcript of real length.
-OLLAMA_NUM_CTX_MIN = _positive_int_env('OLLAMA_NUM_CTX_MIN', 32768) or 32768
 
-# Memory-safe ceiling. A large window's key-value cache costs host RAM, and
-# Ollama runs on the host rather than in this container. 0 means the model's
-# own reported limit is the only bound.
-OLLAMA_NUM_CTX_MAX = _positive_int_env('OLLAMA_NUM_CTX_MAX', 0)
+def apply_settings(values):
+    """Make the values current.
 
-# Escape hatch: a fixed window that disables sizing entirely. 0 means auto.
-OLLAMA_NUM_CTX = _positive_int_env('OLLAMA_NUM_CTX', 0)
+    The rest of the file reads plain module globals, so those are rebound here
+    rather than every caller being changed to look settings up. A job already
+    running keeps the values it started with.
+    """
+    global OLLAMA_BASE_URL, GEMMA_MODEL_NAME, OLLAMA_TIMEOUT_SECONDS, OLLAMA_KEEP_ALIVE
+    global OLLAMA_NUM_CTX_MIN, OLLAMA_NUM_CTX_MAX, OLLAMA_NUM_CTX, OLLAMA_NUM_PREDICT
+    global OLLAMA_CHARS_PER_TOKEN, DEFAULT_LANGUAGE, GEMINI_API_KEY, GEMINI_MODEL_NAME
+    global gemini_client
 
-# Output tokens reserved out of the window. Prompt and completion share it.
-OLLAMA_NUM_PREDICT = _positive_int_env('OLLAMA_NUM_PREDICT', 2000) or 2000
+    key_changed = values['GEMINI_API_KEY'] != GEMINI_API_KEY
 
-# Characters per token, used to estimate a prompt without a tokeniser. Chosen
-# pessimistically: Danish and mixed-language transcripts tokenise worse than
-# English, and over-estimating only asks for a slightly larger window.
-OLLAMA_CHARS_PER_TOKEN = _positive_float_env('OLLAMA_CHARS_PER_TOKEN', 3.0)
+    OLLAMA_BASE_URL = values['OLLAMA_BASE_URL']
+    GEMMA_MODEL_NAME = values['GEMMA_MODEL_NAME']
+    OLLAMA_TIMEOUT_SECONDS = values['OLLAMA_TIMEOUT_SECONDS']
+    OLLAMA_KEEP_ALIVE = values['OLLAMA_KEEP_ALIVE']
+    OLLAMA_NUM_CTX_MIN = values['OLLAMA_NUM_CTX_MIN']
+    OLLAMA_NUM_CTX_MAX = values['OLLAMA_NUM_CTX_MAX']
+    OLLAMA_NUM_CTX = values['OLLAMA_NUM_CTX']
+    OLLAMA_NUM_PREDICT = values['OLLAMA_NUM_PREDICT']
+    OLLAMA_CHARS_PER_TOKEN = values['OLLAMA_CHARS_PER_TOKEN']
+    DEFAULT_LANGUAGE = values['WHISPER_LANGUAGE']
+    GEMINI_API_KEY = values['GEMINI_API_KEY']
+    GEMINI_MODEL_NAME = values['GEMINI_MODEL_NAME']
+    if key_changed or (GEMINI_API_KEY and gemini_client is None):
+        gemini_client = _make_gemini_client(GEMINI_API_KEY)
+
+    current_settings.clear()
+    current_settings.update(values)
+
+    print(f"Settings: Ollama at {OLLAMA_BASE_URL}, model {GEMMA_MODEL_NAME}, "
+          f"keep_alive {OLLAMA_KEEP_ALIVE}, timeout {OLLAMA_TIMEOUT_SECONDS}s, "
+          f"default language {DEFAULT_LANGUAGE}, "
+          f"Gemini model {GEMINI_MODEL_NAME}, key {'set' if GEMINI_API_KEY else 'not set'}")
+
+
+def settings_payload():
+    """What the page renders: each setting with its value, never the key itself."""
+    fields = []
+    for spec in SETTINGS_SPEC:
+        value = current_settings.get(spec['key'], spec['default'])
+        field = {name: spec[name] for name in ('key', 'group', 'type', 'label', 'help', 'default')}
+        if spec.get('optional'):
+            field['optional'] = True
+        if spec['type'] == 'secret':
+            field['value'] = ''
+            field['is_set'] = bool(value)
+        else:
+            field['value'] = value
+        fields.append(field)
+    return {'fields': fields, 'saved': os.path.exists(SETTINGS_PATH)}
+
 
 # Slack for the prompt template, chat formatting and estimation error.
 CONTEXT_HEADROOM_TOKENS = 512
 
 # Windows snap to these rungs. Ollama reloads the model whenever num_ctx
-# changes, which costs the cold load that OLLAMA_KEEP_ALIVE exists to avoid,
-# so repeat analyses should land on a shared rung rather than a bespoke size.
+# changes, which would cost a cold load on every run for anyone keeping the
+# model resident with OLLAMA_KEEP_ALIVE, so repeat analyses should land on a
+# shared rung rather than a bespoke size.
 CONTEXT_LADDER = (32768, 65536, 98304, 131072)
 
 # How long a model's reported context limit stays cached. Long enough that a
@@ -232,9 +407,6 @@ WHISPER_MODEL_NAME = 'turbo'
 # outside the image, where faster-whisper resolves and caches it itself.
 WHISPER_MODEL_PATH = os.getenv('WHISPER_MODEL_PATH', '/opt/whisper-large-v3-turbo')
 
-# Default transcription language. 'auto' lets Whisper detect it per file.
-DEFAULT_LANGUAGE = os.getenv('WHISPER_LANGUAGE', 'auto').strip().lower() or 'auto'
-
 
 def resolve_language(value):
     """Map a requested language to what Whisper expects, None meaning auto."""
@@ -244,25 +416,31 @@ def resolve_language(value):
     if code in ('', 'auto'):
         return None
     return code if code in _LANGUAGE_CODES else None
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-GEMMA_MODEL_NAME = os.getenv('GEMMA_MODEL_NAME', 'gemma4:e4b')
+# The values in force. Rebound by apply_settings(), which is why the rest of
+# the file can keep reading plain module globals.
+OLLAMA_BASE_URL = GEMMA_MODEL_NAME = OLLAMA_KEEP_ALIVE = DEFAULT_LANGUAGE = ''
+GEMINI_API_KEY = GEMINI_MODEL_NAME = ''
+OLLAMA_TIMEOUT_SECONDS = OLLAMA_NUM_CTX_MIN = OLLAMA_NUM_CTX_MAX = OLLAMA_NUM_CTX = OLLAMA_NUM_PREDICT = 0
+OLLAMA_CHARS_PER_TOKEN = 3.0
+gemini_client = None
 
 
-# Validate and initialize Gemini client
-if GEMINI_API_KEY and GENAI_AVAILABLE:
-    print("Gemini API Key configured: ✓")
-    try:
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        print("Gemini client initialized successfully")
-    except Exception as e:
-        print(f"Failed to initialize Gemini client: {e}")
-        gemini_client = None
-else:
+def _make_gemini_client(api_key):
+    if not api_key:
+        return None
     if not GENAI_AVAILABLE:
         print("Warning: google-genai package not available. Cloud Gemini will not be available.")
-    elif not GEMINI_API_KEY:
-        print("Warning: GEMINI_API_KEY not set. Cloud Gemini will not be available.")
-    gemini_client = None
+        return None
+    try:
+        client = genai.Client(api_key=api_key)
+        print("Gemini client initialized")
+        return client
+    except Exception as e:
+        print(f"Failed to initialize Gemini client: {e}")
+        return None
+
+
+apply_settings(load_settings())
 
 # Check if CUDA is available
 cuda_available = torch.cuda.is_available()
@@ -648,7 +826,7 @@ def get_model_context_limit(model_name=None, refresh=False):
 
     if not refresh:
         with _model_info_lock:
-            cached = _model_info_cache.get(model_name)
+            cached = _model_info_cache.get((OLLAMA_BASE_URL, model_name))
         if cached:
             # Re-check a failed lookup sooner than a successful one, so a
             # restarted Ollama is picked up quickly.
@@ -681,7 +859,7 @@ def get_model_context_limit(model_name=None, refresh=False):
         print(f"Could not read the context limit for {model_name}: {e}")
 
     with _model_info_lock:
-        _model_info_cache[model_name] = {'limit': limit, 'fetched_at': now}
+        _model_info_cache[(OLLAMA_BASE_URL, model_name)] = {'limit': limit, 'fetched_at': now}
     return limit
 
 
@@ -765,8 +943,27 @@ def plan_context_window(transcript_chars, overhead_chars=0):
     }
 
 
-def analyze_with_ollama(transcript, prompt_template, context_plan=None):
-    """Use local Ollama service for AI analysis with Gemma 4"""
+def analyze_with_ollama(transcript, prompt_template, context_plan=None,
+                        on_text=None, is_cancelled=None, on_connection=None):
+    """Use local Ollama service for AI analysis with Gemma 4.
+
+    The answer is streamed so the page can show it being written and, more
+    importantly, so a cancelled analysis can be stopped: Ollama stops
+    generating the moment its client disconnects. The connection is handed to
+    on_connection so a cancel can shut it down from another thread even while
+    the model is still loading or reading the prompt, when nothing has arrived
+    yet and there is no piece of text to check the flag between.
+    """
+    on_text = on_text or (lambda text: None)
+    is_cancelled = is_cancelled or (lambda: False)
+    on_connection = on_connection or (lambda conn: None)
+    timeout_message = (
+        f"{GEMMA_MODEL_NAME} did not answer within {OLLAMA_TIMEOUT_SECONDS} seconds. "
+        "Long transcripts on a large model can take a while; raise the timeout "
+        "under Settings."
+    )
+    conn = None
+    started = time.monotonic()
     try:
         full_prompt = prompt_template.format(transcript=transcript)
 
@@ -777,12 +974,19 @@ def analyze_with_ollama(transcript, prompt_template, context_plan=None):
             )
         window = context_plan['window']
 
-        response = requests.post(
-            f'{OLLAMA_BASE_URL}/api/generate',
-            json={
+        url = urlparse(OLLAMA_BASE_URL)
+        secure = url.scheme == 'https'
+        connection_class = http.client.HTTPSConnection if secure else http.client.HTTPConnection
+        conn = connection_class(url.hostname, url.port or (443 if secure else 80),
+                                timeout=OLLAMA_TIMEOUT_SECONDS)
+        on_connection(conn)
+
+        conn.request(
+            'POST', f"{url.path.rstrip('/')}/api/generate",
+            body=json.dumps({
                 'model': GEMMA_MODEL_NAME,
                 'prompt': full_prompt,
-                'stream': False,
+                'stream': True,
                 'keep_alive': OLLAMA_KEEP_ALIVE,
                 'options': {
                     'temperature': 0.7,
@@ -790,58 +994,98 @@ def analyze_with_ollama(transcript, prompt_template, context_plan=None):
                     'num_predict': OLLAMA_NUM_PREDICT,
                     'num_ctx': window
                 }
-            },
-            timeout=OLLAMA_TIMEOUT_SECONDS
+            }).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
         )
 
-        if response.status_code == 200:
-            result = response.json()
+        # Nothing arrives until the model has loaded and read the prompt.
+        response = conn.getresponse()
 
-            # prompt_eval_count is the only exact token count available, since
-            # no tokeniser ships with the service. A count that reaches the
-            # window means Ollama dropped the start of the prompt.
-            prompt_tokens = result.get('prompt_eval_count')
-            if isinstance(prompt_tokens, int) and prompt_tokens > 0:
-                # The measured ratio is the only way to calibrate
-                # OLLAMA_CHARS_PER_TOKEN for the language actually being
-                # transcribed. A measured ratio well above the setting means
-                # transcripts are being trimmed earlier than they need to be.
-                measured = len(full_prompt) / prompt_tokens
-                print(f"Ollama context: num_ctx={window}, prompt used "
-                      f"{prompt_tokens} tokens, estimated "
-                      f"{context_plan['estimated_prompt_tokens']}, measured "
-                      f"{measured:.2f} chars/token against a configured "
-                      f"{OLLAMA_CHARS_PER_TOKEN}")
-                if prompt_tokens >= window - CONTEXT_HEADROOM_TOKENS:
-                    print(f"WARNING: the prompt filled the {window}-token window. "
-                          "Ollama truncates from the start, so this analysis may "
-                          "cover only the end of the transcript.")
-
-            return result.get('response', ''), None
-        else:
-            error_msg = f"Ollama API error: {response.status_code}"
+        if response.status != 200:
+            error_msg = f"Ollama API error: {response.status}"
             try:
-                error_detail = response.json()
-                error_msg += f" - {error_detail.get('error', '')}"
-            except:
+                error_msg += f" - {json.loads(response.read()).get('error', '')}"
+            except Exception:
                 pass
             return None, error_msg
 
-    except requests.exceptions.Timeout:
-        return None, (
-            f"{GEMMA_MODEL_NAME} did not answer within {OLLAMA_TIMEOUT_SECONDS} seconds. "
-            "Long transcripts on a large model can take a while; try again now that the "
-            "model is loaded, or raise OLLAMA_TIMEOUT_SECONDS in .env."
-        )
-    except requests.exceptions.ConnectionError:
-        return None, (
-            f"Cannot reach Ollama at {OLLAMA_BASE_URL}. Start Ollama and reload this page."
-        )
-    except Exception as e:
-        return None, f"Ollama analysis failed: {str(e)}"
+        parts = []
+        final = {}
+        for line in iter(response.readline, b''):
+            if is_cancelled():
+                raise AnalysisCancelled()
+            if time.monotonic() - started > OLLAMA_TIMEOUT_SECONDS:
+                raise TimeoutError()
+            line = line.strip()
+            if not line:
+                continue
+            chunk = json.loads(line)
+            if chunk.get('error'):
+                return None, f"Ollama API error: {chunk['error']}"
+            text = chunk.get('response', '')
+            if text:
+                parts.append(text)
+                on_text(text)
+            if chunk.get('done'):
+                final = chunk
+                break
 
-def analyze_with_gemini(transcript, prompt_template):
-    """Use Google Gemini API for AI analysis"""
+        # prompt_eval_count is the only exact token count available, since
+        # no tokeniser ships with the service. A count that reaches the
+        # window means Ollama dropped the start of the prompt.
+        prompt_tokens = final.get('prompt_eval_count')
+        if isinstance(prompt_tokens, int) and prompt_tokens > 0:
+            # The measured ratio is the only way to calibrate
+            # OLLAMA_CHARS_PER_TOKEN for the language actually being
+            # transcribed. A measured ratio well above the setting means
+            # transcripts are being trimmed earlier than they need to be.
+            measured = len(full_prompt) / prompt_tokens
+            print(f"Ollama context: num_ctx={window}, prompt used "
+                  f"{prompt_tokens} tokens, estimated "
+                  f"{context_plan['estimated_prompt_tokens']}, measured "
+                  f"{measured:.2f} chars/token against a configured "
+                  f"{OLLAMA_CHARS_PER_TOKEN}")
+            if prompt_tokens >= window - CONTEXT_HEADROOM_TOKENS:
+                print(f"WARNING: the prompt filled the {window}-token window. "
+                      "Ollama truncates from the start, so this analysis may "
+                      "cover only the end of the transcript.")
+
+        return ''.join(parts), None
+
+    except AnalysisCancelled:
+        raise
+    except (socket.timeout, TimeoutError):
+        if is_cancelled():
+            raise AnalysisCancelled()
+        return None, timeout_message
+    except (OSError, http.client.HTTPException) as e:
+        # A cancel shuts the socket down under us, which surfaces here.
+        if is_cancelled():
+            raise AnalysisCancelled()
+        if isinstance(e, (ConnectionRefusedError, socket.gaierror)):
+            return None, (
+                f"Cannot reach Ollama at {OLLAMA_BASE_URL}. Start Ollama and reload this page."
+            )
+        return None, f"Ollama analysis failed: {str(e)}"
+    except Exception as e:
+        if is_cancelled():
+            raise AnalysisCancelled()
+        return None, f"Ollama analysis failed: {str(e)}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+def analyze_with_gemini(transcript, prompt_template, on_text=None, is_cancelled=None):
+    """Use Google Gemini API for AI analysis.
+
+    Streamed for the same reasons as the local model, but a cancel here only
+    stops the waiting: Google may finish generating that answer regardless.
+    """
+    on_text = on_text or (lambda text: None)
+    is_cancelled = is_cancelled or (lambda: False)
     try:
         if not GENAI_AVAILABLE:
             return None, "Google Genai package not installed. Cannot use Gemini."
@@ -851,8 +1095,8 @@ def analyze_with_gemini(transcript, prompt_template):
 
         full_prompt = prompt_template.format(transcript=transcript)
 
-        response = gemini_client.models.generate_content(
-            model='gemini-flash-latest',
+        stream = gemini_client.models.generate_content_stream(
+            model=GEMINI_MODEL_NAME,
             contents=full_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.7,
@@ -861,11 +1105,24 @@ def analyze_with_gemini(transcript, prompt_template):
             )
         )
 
-        if response.text:
-            return response.text, None
-        else:
-            return None, "Gemini returned empty response"
+        parts = []
+        for chunk in stream:
+            if is_cancelled():
+                raise AnalysisCancelled()
+            try:
+                text = chunk.text
+            except Exception:
+                text = None
+            if text:
+                parts.append(text)
+                on_text(text)
 
+        if parts:
+            return ''.join(parts), None
+        return None, "Gemini returned empty response"
+
+    except AnalysisCancelled:
+        raise
     except Exception as e:
         return None, f"Gemini analysis failed: {str(e)}"
 
@@ -884,7 +1141,8 @@ def plan_transcript_analysis(transcript, analysis_type, custom_prompt=None):
 
 
 def perform_ai_analysis(transcript, analysis_type, ai_model='gemma', custom_prompt=None,
-                        context_plan=None):
+                        context_plan=None, on_text=None, is_cancelled=None,
+                        on_connection=None):
     """
     Main function to perform AI analysis on transcript
 
@@ -895,6 +1153,11 @@ def perform_ai_analysis(transcript, analysis_type, ai_model='gemma', custom_prom
         custom_prompt: Custom prompt text (only used when analysis_type='custom')
         context_plan: Window plan from plan_transcript_analysis. Recomputed when
             omitted, and unused by the cloud model.
+        on_text: Called with each piece of the answer as it arrives.
+        is_cancelled: Polled between pieces; a true result stops the analysis
+            with AnalysisCancelled.
+        on_connection: Given the local model's connection, so a cancel can
+            shut it down while nothing has arrived yet.
 
     Returns:
         tuple: (analysis_result, error_message)
@@ -909,7 +1172,8 @@ def perform_ai_analysis(transcript, analysis_type, ai_model='gemma', custom_prom
     if ai_model == 'gemini':
         # The cloud model brings its own, far larger window, so the original
         # fixed cap still applies there.
-        return analyze_with_gemini(sanitize_ai_input(transcript), prompt_template)
+        return analyze_with_gemini(sanitize_ai_input(transcript), prompt_template,
+                                   on_text, is_cancelled)
 
     if context_plan is None:
         overhead = len(prompt_template) - len('{transcript}')
@@ -927,7 +1191,8 @@ def perform_ai_analysis(transcript, analysis_type, ai_model='gemma', custom_prom
         truncation_marker=marker
     )
 
-    return analyze_with_ollama(transcript, prompt_template, context_plan)
+    return analyze_with_ollama(transcript, prompt_template, context_plan,
+                               on_text, is_cancelled, on_connection)
 
 def transcribe_with_speakers(audio_path, whisper_model, device_name, task_id=None,
                              diarization_method='on', language=None):
@@ -1434,11 +1699,75 @@ def cancel_task(task_id):
     print(f"Task {task_id} marked for cancellation")
     return jsonify({'success': True, 'message': 'Task cancelled'})
 
+def _run_analysis_job(task_id, transcript, analysis_type, ai_model, custom_prompt,
+                      context_plan):
+    """Run one analysis to completion on a worker thread.
+
+    The text is recorded as it arrives so the page can show it being written,
+    and the task's cancelled flag is checked between pieces. The connection to
+    the local model is kept on the task so a cancel can shut it down at once.
+    """
+    def is_cancelled():
+        with task_lock:
+            return analysis_tasks.get(task_id, {}).get('cancelled', False)
+
+    def on_text(text):
+        with task_lock:
+            task = analysis_tasks.get(task_id)
+            if task is not None:
+                task['text'] += text
+
+    def on_connection(conn):
+        with task_lock:
+            task = analysis_tasks.get(task_id)
+            if task is not None:
+                task['connection'] = conn
+
+    def finish(**fields):
+        with task_lock:
+            task = analysis_tasks.get(task_id)
+            if task is not None:
+                task.update(fields)
+                task['connection'] = None
+                task['finished'] = datetime.now()
+
+    try:
+        analysis_result, error = perform_ai_analysis(
+            transcript, analysis_type, ai_model, custom_prompt, context_plan,
+            on_text=on_text, is_cancelled=is_cancelled, on_connection=on_connection
+        )
+
+        if error:
+            print(f"AI analysis error (Task {task_id}): {error}")
+            finish(status='error', error=error)
+            return
+
+        print(f"AI analysis completed successfully ({len(analysis_result)} chars, Task {task_id})")
+        finish(status='done', result={
+            'success': True,
+            'analysis': analysis_result,
+            'model_used': ai_model,
+            'analysis_type': analysis_type,
+            'context': context_plan
+        })
+
+    except AnalysisCancelled:
+        print(f"AI analysis cancelled (Task {task_id})")
+        finish(status='cancelled', error='Analysis cancelled by user')
+
+    except Exception as e:
+        print(f"Error in AI analysis (Task {task_id}): {e}")
+        finish(status='error', error=str(e))
+
+    finally:
+        release_gpu('ai_analysis')
+
+
 @app.route('/ai-analysis', methods=['POST'])
 @limiter.limit("20 per hour")
 @csrf.exempt  # Exempt from CSRF for API endpoint (handle via custom header)
 def ai_analysis():
-    """Endpoint for AI-powered transcript analysis"""
+    """Start an analysis of a transcript, returning a task to poll."""
     try:
         # Validate Content-Type
         if request.content_type != 'application/json':
@@ -1496,43 +1825,159 @@ def ai_analysis():
         if not gpu_acquired:
             return jsonify({'error': f'GPU is busy: {gpu_error}'}), 503
 
+        task_id = str(uuid.uuid4())
         try:
+            with task_lock:
+                _sweep_finished_tasks_locked()
+                analysis_tasks[task_id] = {
+                    'analysis_type': analysis_type,
+                    'model': ai_model,
+                    'cancelled': False,
+                    'connection': None,
+                    'started': datetime.now(),
+                    'finished': None,
+                    'status': 'running',
+                    'text': '',
+                    'result': None,
+                    'error': None
+                }
+
             print(f"Starting AI analysis: type={analysis_type}, model={ai_model}"
-                  + (f", num_ctx={context_plan['window']}" if context_plan else ""))
+                  + (f", num_ctx={context_plan['window']}" if context_plan else "")
+                  + f" (Task {task_id})")
 
-            # Perform analysis
-            analysis_result, error = perform_ai_analysis(
-                transcript,
-                analysis_type,
-                ai_model,
-                custom_prompt,
-                context_plan
+            worker = threading.Thread(
+                target=_run_analysis_job,
+                args=(task_id, transcript, analysis_type, ai_model, custom_prompt, context_plan),
+                daemon=True
             )
-
-            if error:
-                print(f"AI analysis error: {error}")
-                return jsonify({'error': error}), 500
-
-            print(f"AI analysis completed successfully ({len(analysis_result)} chars)")
-
-            return jsonify({
-                'success': True,
-                'analysis': analysis_result,
-                'model_used': ai_model,
-                'analysis_type': analysis_type,
-                'context': context_plan
-            })
-
-        finally:
-            # Always release GPU lock
+            worker.start()
+        except Exception as e:
+            # Nothing is running, so the lock has to go back here.
             release_gpu('ai_analysis')
+            with task_lock:
+                analysis_tasks.pop(task_id, None)
+            return jsonify({'error': f'Could not start analysis: {e}'}), 500
+
+        return jsonify({'task_id': task_id, 'status': 'running'}), 202
 
     except Exception as e:
         error_msg = str(e)
         print(f"Error in AI analysis endpoint: {error_msg}")
-        # Make sure to release GPU if we got here
-        release_gpu('ai_analysis')
         return jsonify({'error': error_msg}), 500
+
+
+@app.route('/ai-analysis/<task_id>', methods=['GET'])
+@limiter.exempt  # Polled about once a second while an analysis runs
+def analysis_status(task_id):
+    """Report on an analysis started by POST /ai-analysis, with the text so far."""
+    with task_lock:
+        task = analysis_tasks.get(task_id)
+        if task is None:
+            return jsonify({'error': 'Analysis not found or expired'}), 404
+
+        payload = {
+            'task_id': task_id,
+            'status': task['status'],
+            'model': task['model'],
+            'analysis_type': task['analysis_type'],
+            'text': task['text'],
+            'elapsed_seconds': round((datetime.now() - task['started']).total_seconds(), 1)
+        }
+        if task['status'] == 'done':
+            payload['result'] = task['result']
+        elif task['error']:
+            payload['error'] = task['error']
+
+    return jsonify(payload)
+
+
+@app.route('/ai-analysis/<task_id>/cancel', methods=['POST'])
+@csrf.exempt  # Exempt from CSRF for API endpoint, as /cancel/<task_id> is
+def cancel_analysis(task_id):
+    """Stop a running analysis.
+
+    Shutting the socket down is what stops the model: Ollama abandons the
+    generation as soon as its client is gone, and the worker sees the broken
+    connection and records the cancellation.
+    """
+    with task_lock:
+        task = analysis_tasks.get(task_id)
+        if task is None:
+            return jsonify({'error': 'Analysis not found or already completed'}), 404
+        if task['status'] != 'running':
+            return jsonify({'error': f'Analysis already {task["status"]}'}), 409
+        task['cancelled'] = True
+        conn = task.get('connection')
+
+    if conn is not None:
+        try:
+            if conn.sock is not None:
+                conn.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+    print(f"Analysis {task_id} marked for cancellation")
+    return jsonify({'success': True, 'message': 'Analysis cancelled'})
+
+@app.route('/settings', methods=['GET'])
+@limiter.exempt
+def get_settings():
+    """The settings the page shows, with values but never the API key."""
+    return jsonify(settings_payload())
+
+
+@app.route('/settings', methods=['POST'])
+@csrf.exempt  # Exempt from CSRF for API endpoint, as the other JSON routes are
+def update_settings():
+    """Validate, save and apply the settings sent from the page.
+
+    Only the keys present in the request change. A secret sent as an empty
+    string is cleared; one left out of the request is kept.
+    """
+    data = request.get_json(silent=True) or {}
+    values = dict(current_settings)
+    errors = {}
+    for spec in SETTINGS_SPEC:
+        key = spec['key']
+        if key not in data:
+            continue
+        value, error = coerce_setting(spec, data[key])
+        if error:
+            errors[key] = error
+        else:
+            values[key] = value
+
+    if errors:
+        return jsonify({'error': 'Some values were not accepted', 'errors': errors}), 400
+
+    try:
+        save_settings(values)
+    except OSError as e:
+        return jsonify({'error': f'Could not write {SETTINGS_PATH}: {e}'}), 500
+
+    apply_settings(values)
+    return jsonify(settings_payload())
+
+
+@app.route('/settings/reset', methods=['POST'])
+@csrf.exempt  # Exempt from CSRF for API endpoint, as the other JSON routes are
+def reset_settings():
+    """Forget what was saved from the page, back to the environment and defaults."""
+    try:
+        os.remove(SETTINGS_PATH)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        return jsonify({'error': f'Could not remove {SETTINGS_PATH}: {e}'}), 500
+
+    apply_settings(load_settings())
+    return jsonify(settings_payload())
+
 
 @app.route('/gpu-status', methods=['GET'])
 @limiter.exempt  # No rate limit on status checks
@@ -1603,6 +2048,7 @@ def health():
             'ollama_available': False,
             'gemini_available': bool(GEMINI_API_KEY),
             'gemma_model': GEMMA_MODEL_NAME,
+            'gemini_model': GEMINI_MODEL_NAME,
             # Context sizing, so the page can estimate a transcript's fit
             # before submitting it. context_limit stays null until Ollama
             # confirms it has the model.

@@ -90,18 +90,17 @@ background.
 
 ### Changing settings
 
-Only if you want to. Copy the example file and edit it:
+Only if you want to. Open **Settings** at the bottom of the page. The Gemini API
+key, the Ollama address and model, how long the model stays loaded, the default
+transcription language and the context-window tuning are all there. Changes
+apply at once, with no restart, and are saved to `./data/settings.json`, so they
+survive stopping, removing and rebuilding the container.
 
-```bash
-cp .env.example .env
-```
-
-In PowerShell that one is `Copy-Item .env.example .env`. It is the only command
-in this README that differs by platform.
-
-Compose picks `.env` up automatically on the next start, and anything you leave
-out keeps its default. This is where you would put a Gemini API key, point at a
-different Ollama model, or pin the transcription language.
+A `.env` file still works for deployments that prefer one. Copy `.env.example`
+to `.env` (`Copy-Item .env.example .env` in PowerShell) and Compose passes it
+into the container on the next start. Anything in it overrides the built-in
+defaults, and anything saved from the page overrides that. Reset in Settings
+removes the saved file and returns to the `.env` values or the defaults.
 
 ### Using a GPU
 
@@ -164,7 +163,8 @@ docker compose down
 ```
 
 The built image survives either way, so even `down` does not mean rebuilding from
-scratch.
+scratch. So do your transcripts and your settings: they live in `./outputs` and
+`./data` on this machine, not inside the container.
 
 The service is set to restart unless you stopped it deliberately, so once it is
 running it comes back on its own when Docker Desktop starts.
@@ -239,7 +239,12 @@ With it off:
 - `GET /` - Web interface
 - `POST /upload` - Start a transcription, returning `202` with a `task_id`
 - `GET /task/<task_id>` - Poll that transcription and collect its result
-- `POST /ai-analysis` - Summarise or analyse a finished transcript
+- `POST /ai-analysis` - Start an analysis of a finished transcript, returning `202` with a `task_id`
+- `GET /ai-analysis/<task_id>` - Poll that analysis; includes the answer written so far
+- `POST /ai-analysis/<task_id>/cancel` - Stop a running analysis
+- `GET /settings` - The settings the page shows, values included but never the API key
+- `POST /settings` - Save and apply settings; only the keys sent change
+- `POST /settings/reset` - Forget the saved settings, back to `.env` values or the defaults
 - `GET /download/<filename>` - Download transcript
 - `POST /cancel/<task_id>` - Cancel running transcription
 - `GET /gpu-status` - Whether a transcription or analysis is currently running
@@ -252,7 +257,7 @@ With it off:
 Transcription always runs Whisper large-v3-turbo. There is no model choice to make.
 
 ### Language
-Auto-detect by default. Pick a language in the interface when the audio is short or noisy, since detection is less reliable there. `WHISPER_LANGUAGE` in `.env` sets the starting value.
+Auto-detect by default. Pick a language in the interface when the audio is short or noisy, since detection is less reliable there. The default language under Settings sets the starting value.
 
 ### Speaker identification
 On or off. On labels each line with a speaker using SpeechBrain ECAPA-TDNN embeddings (`spkrec-ecapa-voxceleb`), clustered with a distance threshold calibrated against known single- and two-speaker audio. Off produces a plain timestamped transcript and runs faster.
@@ -311,28 +316,27 @@ Runs on your own machine through [Ollama](https://ollama.com), so the transcript
 ollama pull gemma4:e4b
 ```
 
-Then set both values in `.env`:
-
-```
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-GEMMA_MODEL_NAME=gemma4:e4b
-```
-
-`host.docker.internal` reaches an Ollama installed on the host from inside the container. Use `http://localhost:11434` when running the app outside Docker. To use a different local model, pull it and change `GEMMA_MODEL_NAME` to its Ollama tag.
+The defaults already point at an Ollama on this machine and at the `gemma4:e4b` tag, so nothing needs configuring. To use a different local model, pull it and enter its Ollama tag under Settings. When running the app outside Docker, set the Ollama address there to `http://localhost:11434`.
 
 ### Cloud Gemini
 
-Set `GEMINI_API_KEY` in `.env` with a key from https://aistudio.google.com/app/apikey.
+Enter a key from https://aistudio.google.com/app/apikey under Settings. It is kept in `./data/settings.json` on this machine and used only when you pick the cloud option.
+
+The model is a setting too. The default, `gemini-flash-latest`, is an alias that Google moves to each new Gemini Flash release, so the model behind it changes over time. Enter a specific id such as `gemini-3.5-flash` to pin one.
 
 Either option is greyed out in the interface when it cannot run, with a note saying what to configure. If Ollama is running but lacks the configured model, the note gives you the `ollama pull` command.
 
-Analysis waits up to `OLLAMA_TIMEOUT_SECONDS` (600 by default). For scale, a cold model load costs roughly 35 seconds and a 45-minute transcript takes about 90 seconds more. `OLLAMA_KEEP_ALIVE` holds the model in memory so only the first analysis pays the load.
+Analysis waits up to the timeout under Settings (600 seconds by default). For scale, a cold model load costs roughly 35 seconds and a 45-minute transcript takes about 90 seconds more.
+
+The answer appears as it is written, and Cancel stops it. With the local model that closes the connection to Ollama, which stops generating at once, even while it is still loading or reading the transcript. With Cloud Gemini it stops the page waiting, but Google may still finish the answer on its side.
+
+Gemma is unloaded from Ollama as soon as an analysis finishes, so its memory goes back to the machine before the next transcription. Every analysis therefore pays the model load. Set *Keep the model loaded* under Settings to a duration such as `30m` to keep it loaded between analyses instead.
 
 ### Context window
 
 Ollama drops the front of a prompt that does not fit the context window, and it does not say so. Left at the server default, a long transcript would be summarised from its tail alone. The service therefore picks a window per analysis, from the transcript's own length.
 
-The size starts at `OLLAMA_NUM_CTX_MIN` and grows through 32K, 64K, 96K and 128K as the transcript needs it, never past what the model reports it supports. It snaps to those steps rather than picking an exact number because Ollama reloads the model whenever the window changes, which would otherwise undo `OLLAMA_KEEP_ALIVE` on every run.
+The size starts at `OLLAMA_NUM_CTX_MIN` and grows through 32K, 64K, 96K and 128K as the transcript needs it, never past what the model reports it supports. It snaps to those steps rather than picking an exact number because Ollama reloads the model whenever the window changes, which would otherwise undo an `OLLAMA_KEEP_ALIVE` setting on every run.
 
 | Setting | Purpose | Default |
 | --- | --- | --- |

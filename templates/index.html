@@ -323,6 +323,64 @@
             font-size: 0.82em;
         }
 
+        /* Settings */
+        .settings-container {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid var(--color-border);
+        }
+
+        .settings-container summary {
+            cursor: pointer;
+            font-size: 1.15em;
+            font-weight: 600;
+            color: var(--color-text-primary);
+        }
+
+        .settings-field {
+            margin-top: 14px;
+        }
+
+        .settings-field label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 0.9em;
+            font-weight: 600;
+            color: var(--color-text-primary);
+        }
+
+        .settings-input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 10px 12px;
+            background: var(--color-bg-secondary);
+            border: 2px solid var(--color-border);
+            border-radius: 8px;
+            color: var(--color-text-primary);
+            font-size: 0.95em;
+        }
+
+        .settings-input:focus {
+            outline: none;
+            border-color: var(--color-primary);
+        }
+
+        .settings-input.invalid {
+            border-color: #ef4444;
+        }
+
+        .settings-error {
+            color: #f87171;
+        }
+
+        .settings-actions {
+            margin-top: 18px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+        }
+
         .context-note {
             margin: 14px 0 0;
             padding: 10px 12px;
@@ -1594,7 +1652,7 @@
                             <label for="aiModelGemma" class="option-label">
                                 <div class="option-icon">🏠</div>
                                 <div class="option-text">
-                                    <div class="option-name">Local {{ gemma_model }}</div>
+                                    <div class="option-name" id="aiModelGemmaName">Local {{ gemma_model }}</div>
                                     <div class="option-description">via Ollama</div>
                                     <div class="option-speed" style="color: var(--color-accent-teal);">🔒 Private</div>
                                 </div>
@@ -1606,7 +1664,7 @@
                                 <div class="option-icon">☁️</div>
                                 <div class="option-text">
                                     <div class="option-name">Cloud Gemini</div>
-                                    <div class="option-description">via Google API</div>
+                                    <div class="option-description" id="aiModelGeminiDescription">via Google API</div>
                                     <div class="option-speed" style="color: var(--color-accent-pink);">⚡ Faster</div>
                                 </div>
                             </label>
@@ -1625,6 +1683,7 @@
                         <button class="btn ai-btn" id="insightsBtn" disabled>
                             💡 Extract Insights
                         </button>
+                        <button class="btn cancel-btn" id="aiCancelBtn" style="display: none;">❌ Cancel</button>
                     </div>
 
                     <div class="custom-prompt-section">
@@ -1665,6 +1724,19 @@
                     </div>
                     <div class="ai-results-content" id="aiResultsContent"></div>
                 </div>
+            </div>
+
+            <div class="settings-container">
+                <details id="settingsDetails">
+                    <summary>⚙️ Settings</summary>
+                    <p class="selector-note">Changes apply at once, with no restart, and are kept across restarts and rebuilds of the container.</p>
+                    <div id="settingsFields"></div>
+                    <div class="settings-actions">
+                        <button class="btn" id="settingsSaveBtn">💾 Save settings</button>
+                        <button class="btn cancel-btn" id="settingsResetBtn">↩️ Reset to defaults</button>
+                    </div>
+                    <div class="status" id="settingsStatus"></div>
+                </details>
             </div>
         </div>
     </div>
@@ -2059,6 +2131,13 @@
                 }
 
                 applyAiAvailability(data.ai_services || {});
+
+                // The default language from Settings preselects the transcription language.
+                const languageSelect = document.getElementById('languageSelect');
+                if (data.default_language
+                        && languageSelect.querySelector(`option[value="${data.default_language}"]`)) {
+                    languageSelect.value = data.default_language;
+                }
             } catch (error) {
                 console.error('Failed to fetch system info:', error);
             }
@@ -2071,11 +2150,17 @@
             const cloudInput = document.getElementById('aiModelGemini');
             const note = document.getElementById('aiModelNote');
             const model = ai.gemma_model || 'the local model';
+            localModelName = model;
+            document.getElementById('aiModelGemmaName').textContent = `Local ${model}`;
+            if (ai.gemini_model) {
+                cloudModelName = ai.gemini_model;
+                document.getElementById('aiModelGeminiDescription').textContent = `${cloudModelName} via Google API`;
+            }
             const reasons = [];
 
             const localReady = !!ai.ollama_available && !!ai.ollama_model_available;
+            localInput.disabled = !localReady;
             if (!localReady) {
-                localInput.disabled = true;
                 if (!ai.ollama_available) {
                     reasons.push(`Local ${model} is unavailable: Ollama is not reachable at `
                         + `${ai.ollama_url || 'its configured address'}. Start Ollama, then reload this page.`);
@@ -2086,15 +2171,18 @@
             }
 
             const cloudReady = !!ai.gemini_available;
+            cloudInput.disabled = !cloudReady;
             if (!cloudReady) {
-                cloudInput.disabled = true;
-                reasons.push('Cloud Gemini is unavailable: set GEMINI_API_KEY in your .env file '
-                    + 'and restart the service.');
+                reasons.push('Cloud Gemini is unavailable: add an API key under Settings.');
             }
 
             // Keep the selection on something that can actually run.
             if (localInput.checked && !localReady && cloudReady) cloudInput.checked = true;
             if (cloudInput.checked && !cloudReady && localReady) localInput.checked = true;
+            if (!localInput.checked && !cloudInput.checked) {
+                if (localReady) localInput.checked = true;
+                else if (cloudReady) cloudInput.checked = true;
+            }
 
             aiBackendAvailable = localReady || cloudReady;
             if (!aiBackendAvailable) {
@@ -2786,8 +2874,11 @@
         const aiStatus = document.getElementById('aiStatus');
         const aiResults = document.getElementById('aiResults');
         const aiResultsContent = document.getElementById('aiResultsContent');
+        const aiCancelBtn = document.getElementById('aiCancelBtn');
 
         let currentAiResult = '';
+        let currentAnalysisId = null;
+        let analysisCancelRequested = false;
         let gpuStatusInterval = null;
 
         // Set from /health: false when neither analysis backend can run.
@@ -2795,6 +2886,10 @@
 
         // Context sizing reported by /health, used for the overflow warning.
         let contextInfo = null;
+
+        // Names of the models, refreshed from /health when settings change.
+        let localModelName = '{{ gemma_model }}';
+        let cloudModelName = 'gemini-flash-latest';
 
         // Show AI analysis section when transcript is available
         function enableAiAnalysis() {
@@ -3070,6 +3165,53 @@
             }
         }
 
+        // Poll a started analysis until it finishes, rendering the answer as
+        // it is written. Resolves with the result payload, or throws.
+        async function awaitAnalysis(taskId) {
+            const POLL_MS = 700;
+            let shown = '';
+
+            for (;;) {
+                await new Promise(resolve => setTimeout(resolve, POLL_MS));
+
+                let response;
+                try {
+                    response = await fetch(`/ai-analysis/${taskId}`);
+                } catch (error) {
+                    // The analysis keeps running on the server; try again.
+                    continue;
+                }
+
+                if (response.status === 404) {
+                    throw new Error('The analysis finished but its result expired '
+                        + 'before this page collected it.');
+                }
+
+                const data = await response.json();
+
+                if (data.text && data.text !== shown) {
+                    shown = data.text;
+                    currentAiResult = shown;
+                    aiResultsContent.innerHTML = renderMarkdown(shown);
+                    aiResults.style.display = 'block';
+                }
+
+                if (data.status === 'running' && !analysisCancelRequested) {
+                    if (shown) {
+                        const words = shown.split(/\s+/).filter(Boolean).length;
+                        aiStatus.innerHTML = `<div class="spinner"></div>Writing, ${words} words so far...`;
+                    } else {
+                        aiStatus.innerHTML = '<div class="spinner"></div>Loading the model and reading '
+                            + `the transcript, ${Math.round(data.elapsed_seconds)}s...`;
+                    }
+                }
+
+                if (data.status === 'done') return data.result;
+                if (data.status === 'cancelled') throw new DOMException('Cancelled', 'AbortError');
+                if (data.status === 'error') throw new Error(data.error || 'Analysis failed');
+            }
+        }
+
         // Perform AI analysis
         async function performAiAnalysis(analysisType, customPrompt = null) {
             if (!transcriptText) {
@@ -3085,6 +3227,7 @@
             aiStatus.className = 'status processing show';
             aiStatus.innerHTML = '<div class="spinner"></div>Analyzing transcript...';
             aiResults.style.display = 'none';
+            analysisCancelRequested = false;
 
             try {
                 const requestData = {
@@ -3125,36 +3268,63 @@
                     result = await response.json();
                 }
 
-                if (result.success) {
-                    currentAiResult = result.analysis;
-                    aiResultsContent.innerHTML = renderMarkdown(currentAiResult);
-                    aiResults.style.display = 'block';
-
-                    const modelName = aiModel === 'gemma' ? 'Local {{ gemma_model }}' : 'Cloud Gemini';
-                    const ctx = result.context;
-                    let statusText = `✅ Analysis complete using ${modelName}`;
-                    if (ctx && ctx.chars_dropped > 0) {
-                        statusText = `⚠️ Analysis complete using ${modelName}, but about `
-                            + `${ctx.chars_dropped.toLocaleString()} characters did not fit the `
-                            + `${ctx.window.toLocaleString()} token window and were dropped from `
-                            + 'the start of the transcript.';
-                    } else if (ctx) {
-                        statusText += ` with a ${ctx.window.toLocaleString()} token context window`;
-                    }
-                    aiStatus.className = ctx && ctx.chars_dropped > 0
-                        ? 'status show' : 'status success show';
-                    aiStatus.innerHTML = statusText;
-                } else {
-                    throw new Error(result.error || 'Analysis failed');
+                if (!response.ok || !result.task_id) {
+                    throw new Error(result.error || 'Could not start the analysis');
                 }
+
+                // The request returns as soon as the analysis is started and the
+                // answer is collected by polling, the same way a transcription
+                // is. That is what makes Cancel possible, and a dropped
+                // connection no longer loses a long analysis.
+                currentAnalysisId = result.task_id;
+                aiCancelBtn.disabled = false;
+                aiCancelBtn.style.display = 'inline-block';
+
+                const outcome = await awaitAnalysis(currentAnalysisId);
+
+                currentAiResult = outcome.analysis;
+                aiResultsContent.innerHTML = renderMarkdown(currentAiResult);
+                aiResults.style.display = 'block';
+
+                const modelName = aiModel === 'gemma' ? `Local ${localModelName}` : `Cloud Gemini (${cloudModelName})`;
+                const ctx = outcome.context;
+                let statusText = `✅ Analysis complete using ${modelName}`;
+                if (ctx && ctx.chars_dropped > 0) {
+                    statusText = `⚠️ Analysis complete using ${modelName}, but about `
+                        + `${ctx.chars_dropped.toLocaleString()} characters did not fit the `
+                        + `${ctx.window.toLocaleString()} token window and were dropped from `
+                        + 'the start of the transcript.';
+                } else if (ctx) {
+                    statusText += ` with a ${ctx.window.toLocaleString()} token context window`;
+                }
+                aiStatus.className = ctx && ctx.chars_dropped > 0
+                    ? 'status show' : 'status success show';
+                aiStatus.innerHTML = statusText;
             } catch (error) {
                 aiStatus.className = 'status error show';
-                aiStatus.innerHTML = '❌ Error: ' + error.message;
+                aiStatus.innerHTML = error.name === 'AbortError'
+                    ? '🛑 Analysis cancelled'
+                    : '❌ Error: ' + error.message;
             } finally {
+                currentAnalysisId = null;
+                aiCancelBtn.style.display = 'none';
                 enableAiAnalysis();
                 enableTranscription();
             }
         }
+
+        aiCancelBtn.addEventListener('click', async () => {
+            if (!currentAnalysisId) return;
+            analysisCancelRequested = true;
+            aiCancelBtn.disabled = true;
+            aiStatus.className = 'status processing show';
+            aiStatus.innerHTML = '<div class="spinner"></div>Cancelling...';
+            try {
+                await fetch(`/ai-analysis/${currentAnalysisId}/cancel`, { method: 'POST' });
+            } catch (error) {
+                // The poll loop reports whatever the server ends up doing.
+            }
+        });
 
         // Event listeners for AI buttons
         summarizeBtn.addEventListener('click', () => {
@@ -3262,6 +3432,182 @@
 
         // Start GPU status polling when page loads
         startGpuStatusPolling();
+        // ============ Settings ============
+        // Rendered from what the server describes, so a new setting only has
+        // to be added to SETTINGS_SPEC in app.py.
+        const settingsFields = document.getElementById('settingsFields');
+        const settingsStatus = document.getElementById('settingsStatus');
+        const settingsSaveBtn = document.getElementById('settingsSaveBtn');
+        const settingsResetBtn = document.getElementById('settingsResetBtn');
+
+        function renderSettings(payload) {
+            settingsFields.innerHTML = '';
+            const groups = new Map();
+            payload.fields.forEach(field => {
+                if (!groups.has(field.group)) groups.set(field.group, []);
+                groups.get(field.group).push(field);
+            });
+
+            groups.forEach((fields, group) => {
+                const card = document.createElement('div');
+                card.className = 'selector-card';
+                const title = document.createElement('h4');
+                title.textContent = group;
+                card.appendChild(title);
+
+                fields.forEach(field => {
+                    const wrap = document.createElement('div');
+                    wrap.className = 'settings-field';
+
+                    const label = document.createElement('label');
+                    label.htmlFor = `setting-${field.key}`;
+                    label.textContent = field.label;
+
+                    let input;
+                    if (field.type === 'language') {
+                        // The same choices as the transcription language selector.
+                        input = document.getElementById('languageSelect').cloneNode(true);
+                        input.className = 'settings-input';
+                        input.value = field.value;
+                    } else {
+                        input = document.createElement('input');
+                        input.className = 'settings-input';
+                        input.type = field.type === 'secret' ? 'password' : 'text';
+                        input.autocomplete = 'off';
+                        if (field.type === 'secret') {
+                            input.value = '';
+                            input.placeholder = field.is_set
+                                ? 'A key is saved. Type a new one to replace it.'
+                                : 'Not set';
+                        } else {
+                            input.value = field.optional && !field.value ? '' : String(field.value);
+                            input.placeholder = field.optional ? 'Empty for automatic' : String(field.default);
+                        }
+                    }
+                    input.id = `setting-${field.key}`;
+                    input.dataset.key = field.key;
+                    input.dataset.type = field.type;
+
+                    const help = document.createElement('p');
+                    help.className = 'selector-note';
+                    help.textContent = field.help;
+
+                    const error = document.createElement('p');
+                    error.className = 'selector-note settings-error';
+                    error.id = `setting-${field.key}-error`;
+                    error.hidden = true;
+
+                    wrap.append(label, input, help, error);
+
+                    if (field.type === 'secret' && field.is_set) {
+                        const remove = document.createElement('button');
+                        remove.type = 'button';
+                        remove.className = 'copy-btn';
+                        remove.textContent = 'Remove key';
+                        remove.addEventListener('click', () => {
+                            input.value = '';
+                            input.dataset.clear = '1';
+                            input.placeholder = 'The key will be removed when you save';
+                        });
+                        wrap.appendChild(remove);
+                    }
+
+                    card.appendChild(wrap);
+                });
+                settingsFields.appendChild(card);
+            });
+        }
+
+        // Only what the user can have changed is sent. A secret goes only when
+        // typed or explicitly removed, so an untouched key is kept.
+        function collectSettings() {
+            const body = {};
+            settingsFields.querySelectorAll('[data-key]').forEach(input => {
+                const key = input.dataset.key;
+                if (input.dataset.type === 'secret') {
+                    if (input.value) body[key] = input.value;
+                    else if (input.dataset.clear === '1') body[key] = '';
+                    return;
+                }
+                body[key] = input.value.trim();
+            });
+            return body;
+        }
+
+        function showSettingsErrors(errors) {
+            settingsFields.querySelectorAll('[data-key]').forEach(input => {
+                const message = errors && errors[input.dataset.key];
+                const note = document.getElementById(`${input.id}-error`);
+                input.classList.toggle('invalid', !!message);
+                if (note) {
+                    note.textContent = message || '';
+                    note.hidden = !message;
+                }
+            });
+        }
+
+        async function loadSettings() {
+            try {
+                const response = await fetch('/settings');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                renderSettings(await response.json());
+            } catch (error) {
+                settingsStatus.className = 'status error show';
+                settingsStatus.textContent = '❌ Could not load settings: ' + error.message;
+            }
+        }
+
+        // Settings take effect at once, so whatever depends on them is refreshed.
+        async function settingsApplied(payload, message) {
+            renderSettings(payload);
+            showSettingsErrors({});
+            settingsStatus.className = 'status success show';
+            settingsStatus.textContent = message;
+            await loadSystemInfo();
+            if (transcriptText) enableAiAnalysis();
+        }
+
+        settingsSaveBtn.addEventListener('click', async () => {
+            settingsSaveBtn.disabled = true;
+            settingsStatus.className = 'status processing show';
+            settingsStatus.innerHTML = '<div class="spinner"></div>Saving...';
+            try {
+                const response = await fetch('/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(collectSettings())
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    showSettingsErrors(result.errors);
+                    throw new Error(result.error || 'Settings were not saved');
+                }
+                await settingsApplied(result, '✅ Saved. These settings apply now and are kept across restarts.');
+            } catch (error) {
+                settingsStatus.className = 'status error show';
+                settingsStatus.textContent = '❌ ' + error.message;
+            } finally {
+                settingsSaveBtn.disabled = false;
+            }
+        });
+
+        settingsResetBtn.addEventListener('click', async () => {
+            if (!window.confirm('Reset every setting to its default?')) return;
+            settingsResetBtn.disabled = true;
+            try {
+                const response = await fetch('/settings/reset', { method: 'POST' });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Settings were not reset');
+                await settingsApplied(result, '✅ Settings are back to their defaults.');
+            } catch (error) {
+                settingsStatus.className = 'status error show';
+                settingsStatus.textContent = '❌ ' + error.message;
+            } finally {
+                settingsResetBtn.disabled = false;
+            }
+        });
+
+        loadSettings();
     </script>
 </body>
 </html>

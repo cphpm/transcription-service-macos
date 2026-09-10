@@ -22,10 +22,12 @@ build/
 # Output files
 outputs/*.txt
 uploads/*
+data/*
 
 # Keep directories but ignore content
 !outputs/.gitkeep
 !uploads/.gitkeep
+!data/.gitkeep
 
 # IDE
 .vscode/

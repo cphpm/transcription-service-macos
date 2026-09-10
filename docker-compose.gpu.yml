@@ -10,22 +10,17 @@ services:
       - ./outputs:/app/outputs
       - ./uploads:/app/uploads
       - ./models:/app/models
-    # Compose reads ./.env automatically for these substitutions, so a .env file
-    # overrides any of them, and the defaults apply when there is no .env at all.
+      # Settings saved from the page live here, so they outlive the container.
+      - ./data:/app/data
+    # Settings are changed in the page and saved under ./data. A .env file is
+    # optional: anything in it overrides the built-in defaults, and anything
+    # saved from the page overrides that.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - PYTHONUNBUFFERED=1
       - CUDA_VISIBLE_DEVICES=0
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - GEMMA_MODEL_NAME=${GEMMA_MODEL_NAME:-gemma4:e4b}
-      - OLLAMA_TIMEOUT_SECONDS=${OLLAMA_TIMEOUT_SECONDS:-600}
-      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-30m}
-      - OLLAMA_NUM_CTX_MIN=${OLLAMA_NUM_CTX_MIN:-32768}
-      - OLLAMA_NUM_CTX_MAX=${OLLAMA_NUM_CTX_MAX:-}
-      - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-}
-      - OLLAMA_NUM_PREDICT=${OLLAMA_NUM_PREDICT:-2000}
-      - OLLAMA_CHARS_PER_TOKEN=${OLLAMA_CHARS_PER_TOKEN:-3.0}
-      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-auto}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     deploy:
       resources:
         reservations:
