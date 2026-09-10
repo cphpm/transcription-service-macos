@@ -44,7 +44,9 @@ snapshot_download('mobiuslabsgmbh/faster-whisper-large-v3-turbo', \
 
 RUN python3 -c "\
 from huggingface_hub import snapshot_download; \
-snapshot_download('speechbrain/spkrec-ecapa-voxceleb', local_dir='/opt/huggingface/speechbrain_ecapa')"
+snapshot_download('speechbrain/spkrec-ecapa-voxceleb', \
+                  revision='0f99f2d0ebe89ac095bcc5903c4dd8f72b367286', \
+                  local_dir='/opt/huggingface/speechbrain_ecapa')"
 
 # All weights are baked in above. Block any further contact with HuggingFace so
 # nothing about what gets transcribed leaves this machine at runtime.
@@ -55,9 +57,18 @@ ENV DISABLE_TELEMETRY=1
 # Create directories
 RUN mkdir -p /app/uploads /app/outputs /app/models
 
+# Run as an unprivileged user. ffmpeg and the audio libraries decode whatever
+# is uploaded, and a bug there should not have root inside the container.
+# uid 1000 matches the first user on most Linux hosts, so the bind-mounted
+# folders stay writable there; Docker Desktop maps ownership itself.
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin app \
+    && chown -R app:app /app /opt/huggingface
+
 # Copy application files
-COPY app.py .
-COPY templates templates/
+COPY --chown=app:app app.py .
+COPY --chown=app:app templates templates/
+
+USER app
 
 EXPOSE 5000
 

@@ -1,9 +1,15 @@
 services:
   transcription:
     build: .
+    # Named after the project rather than Compose's default of
+    # <folder>-<service>, so it reads as transcription-service in Docker Desktop.
+    image: transcription-service
     container_name: transcription-service
+    # This machine only. There is no login, so the service is not published to
+    # the network; to reach it from other devices, use "8080:5000" instead,
+    # knowing that anyone on that network can then use and reconfigure it.
     ports:
-      - "8080:5000"
+      - "127.0.0.1:8080:5000"
     volumes:
       - ./outputs:/app/outputs
       - ./uploads:/app/uploads

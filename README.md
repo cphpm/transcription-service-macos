@@ -88,19 +88,29 @@ There is no configuration step. Every setting has a working default, so nothing
 needs to be created or filled in before the first run. Add `-d` to run it in the
 background.
 
+The service listens on this machine only, at http://localhost:8080. There is no
+login, so it is deliberately not published to your network. To use it from
+other devices, change the `ports` line in `docker-compose.yml` from
+`"127.0.0.1:8080:5000"` to `"8080:5000"`, knowing that anyone on that network
+can then transcribe, read every transcript and change the settings.
+
 ### Changing settings
 
-Only if you want to. Open **Settings** at the bottom of the page. The Gemini API
-key, the Ollama address and model, how long the model stays loaded, the default
-transcription language and the context-window tuning are all there. Changes
-apply at once, with no restart, and are saved to `./data/settings.json`, so they
-survive stopping, removing and rebuilding the container.
+Only if you want to. Open **Settings** from the gear button at the top right of
+the page. The Gemini API key, the Ollama address and model, how long the model
+stays loaded, the default transcription language and the context-window tuning
+are all there. Changes apply at once, with no restart. Only values that differ
+from the defaults are saved, to `./data/settings.json`, so they survive stopping,
+removing and rebuilding the container, and a setting you never touched follows
+any later change of default.
 
-A `.env` file still works for deployments that prefer one. Copy `.env.example`
-to `.env` (`Copy-Item .env.example .env` in PowerShell) and Compose passes it
-into the container on the next start. Anything in it overrides the built-in
-defaults, and anything saved from the page overrides that. Reset in Settings
-removes the saved file and returns to the `.env` values or the defaults.
+A `.env` file still works for deployments that prefer one. `.env.example` lists
+every setting with its default, all commented out. Copy it to `.env`
+(`Copy-Item .env.example .env` in PowerShell), uncomment a line and set its
+value, and Compose passes it into the container on the next start. Anything in
+it overrides the built-in defaults, and anything saved from the page overrides
+that. Reset in Settings removes the saved file and returns to the `.env` values
+or the defaults.
 
 ### Using a GPU
 
@@ -162,7 +172,8 @@ clean slate:
 docker compose down
 ```
 
-The built image survives either way, so even `down` does not mean rebuilding from
+The built image, tagged `transcription-service` (`transcription-service:gpu` for the
+GPU build), survives either way, so even `down` does not mean rebuilding from
 scratch. So do your transcripts and your settings: they live in `./outputs` and
 `./data` on this machine, not inside the container.
 
@@ -306,7 +317,7 @@ whatever the browser ends up showing.
 
 ## AI transcript processing
 
-Summaries and other analysis of a finished transcript can run either locally or in the cloud. Pick the model in the "AI Model Selection" card in the web interface.
+Summaries and other analysis of a finished transcript can run either locally or in the cloud. Pick the model in the **AI analysis** section of the side panel; the result appears under the transcript.
 
 ### Local Gemma 4 (default)
 
@@ -324,7 +335,7 @@ Enter a key from https://aistudio.google.com/app/apikey under Settings. It is ke
 
 The model is a setting too. The default, `gemini-flash-latest`, is an alias that Google moves to each new Gemini Flash release, so the model behind it changes over time. Enter a specific id such as `gemini-3.5-flash` to pin one.
 
-Either option is greyed out in the interface when it cannot run, with a note saying what to configure. If Ollama is running but lacks the configured model, the note gives you the `ollama pull` command.
+Either option is greyed out in the interface when it cannot run, and clicking it says what to configure. If Ollama was not running, start it and use the note's link: the page checks again and picks the local model without a reload. If Ollama is running but lacks the configured model, the note gives you the `ollama pull` command.
 
 Analysis waits up to the timeout under Settings (600 seconds by default). For scale, a cold model load costs roughly 35 seconds and a 45-minute transcript takes about 90 seconds more.
 
@@ -336,11 +347,11 @@ Gemma is unloaded from Ollama as soon as an analysis finishes, so its memory goe
 
 Ollama drops the front of a prompt that does not fit the context window, and it does not say so. Left at the server default, a long transcript would be summarised from its tail alone. The service therefore picks a window per analysis, from the transcript's own length.
 
-The size starts at `OLLAMA_NUM_CTX_MIN` and grows through 32K, 64K, 96K and 128K as the transcript needs it, never past what the model reports it supports. It snaps to those steps rather than picking an exact number because Ollama reloads the model whenever the window changes, which would otherwise undo an `OLLAMA_KEEP_ALIVE` setting on every run.
+The size starts at `OLLAMA_NUM_CTX_MIN` and grows through 8K, 16K, 32K, 64K, 96K and 128K as the transcript needs it, never past what the model reports it supports. It snaps to those steps rather than picking an exact number because Ollama reloads the model whenever the window changes, which would otherwise undo an `OLLAMA_KEEP_ALIVE` setting on every run.
 
 | Setting | Purpose | Default |
 | --- | --- | --- |
-| `OLLAMA_NUM_CTX_MIN` | Smallest window to ask for | 32768 |
+| `OLLAMA_NUM_CTX_MIN` | Smallest window to ask for | 8192 |
 | `OLLAMA_NUM_CTX_MAX` | Largest window to ask for, guarding host memory | empty, meaning the model's own limit |
 | `OLLAMA_NUM_CTX` | Fixed window, turning automatic sizing off | empty, meaning automatic |
 | `OLLAMA_NUM_PREDICT` | Tokens reserved for the answer | 2000 |
@@ -348,7 +359,7 @@ The size starts at `OLLAMA_NUM_CTX_MIN` and grows through 32K, 64K, 96K and 128K
 
 A large window costs memory, because the key-value cache scales with it. Set `OLLAMA_NUM_CTX_MAX` if you want a firm bound below what the model allows.
 
-The interface shows the chosen window under the analysis buttons, and warns there when a transcript will not fit. A transcript that overflows even the largest allowed window is not analysed until you confirm it, and the result then says how much was dropped. Cloud Gemini has a far larger window and is the better choice for very long recordings.
+The AI analysis section shows the chosen window under the buttons, and warns there when a transcript will not fit. A transcript that overflows even the largest allowed window is not analysed until you confirm it, and the result then says how much was dropped. Cloud Gemini has a far larger window and is the better choice for very long recordings.
 
 Ask Ollama what a model actually supports:
 
@@ -358,7 +369,7 @@ curl -s http://localhost:11434/api/show -d '{"model":"gemma4:e4b"}' | python3 -c
 
 `GET /health` reports whether Ollama is reachable, which models it has available, and the context limit of the configured model.
 
-## License
+## Licence
 
 This project uses OpenAI's Whisper model, run through
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and SpeechBrain's

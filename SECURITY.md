@@ -1,154 +1,64 @@
-# Security Improvements - Implementation Summary
+# Security
 
-## Critical Security Fixes Implemented
+This service is built for one person on one machine. It has no login, so its
+safety rests on not being reachable by anyone else, and on handling the input it
+does receive carefully. This file says what is in place and what to know.
 
-### ✅ 1. Path Traversal Protection
-**File:** `app.py` - `/download` endpoint
-**Fix:** Added `secure_filename()` sanitization and path validation
-```python
-# Prevents attacks like: /download/../../etc/passwd
-safe_filename = secure_filename(filename)
-real_filepath = os.path.realpath(filepath)
-if not real_filepath.startswith(real_output):
-    return jsonify({'error': 'Invalid file path'}), 403
-```
+## Reachability
 
-### ✅ 2. API Key Security
-**File:** `app.py` - Line 47
-**Fix:** Removed partial API key logging
-```python
-# Before: print(f"Gemini API Key configured: {GEMINI_API_KEY[:8]}...")
-# After:  print("Gemini API Key configured: ✓")
-```
+- The container publishes its port on `127.0.0.1` only, so the page is reachable
+  from this machine and not from the network. Changing the `ports` line in the
+  compose file to `"8080:5000"` opens it to everyone on the network, who can then
+  upload audio, read every transcript by name, change the settings (including
+  the Ollama address that transcripts are sent to) and reset them.
+- State-changing requests that a page on another website starts through your
+  browser are refused, using the browser's `Sec-Fetch-Site` and `Origin`
+  headers. The JSON routes also insist on a JSON content type.
+- The page is served with a Content Security Policy: scripts run only from the
+  page's own nonce-marked script, nothing may frame the page, and the page can
+  only talk to its own origin. `X-Frame-Options`, `X-Content-Type-Options` and
+  a referrer policy are set alongside.
 
-### ✅ 3. Prompt Injection Protection
-**File:** `app.py` - New `sanitize_ai_input()` function
-**Fix:** Added input sanitization to prevent malicious AI instructions
-- Removes dangerous patterns: "ignore previous instructions", "you are now", etc.
-- Adds safety prefix to all AI prompts
-- Limits input length to prevent token exhaustion
+## What leaves the machine
 
-### ✅ 4. Secure File Handling
-**File:** `app.py` - `/upload` endpoint
-**Fix:**
-- Added file size limit (500MB)
-- Added `secure_filename()` for uploaded files
-- Prevents directory traversal in filenames
+- Transcription runs entirely locally. Model weights are baked into the image,
+  pinned by commit, and the container runs with Hugging Face's offline mode and
+  telemetry switched off.
+- Transcript analysis talks to the Ollama address in Settings, on this machine
+  by default, and to Google's Gemini API only when Cloud Gemini is chosen.
+- Nothing else is contacted at runtime, and the page loads no third-party
+  resources.
 
-### ✅ 5. Dependency Updates (CVE Fixes)
-**File:** `requirements.txt`
-**Critical Updates:**
-- `torch>=2.6.0` - Fixes CVE-2025-32434 (RCE vulnerability)
-- `requests>=2.32.3` - Fixes CVE-2024-35195 (certificate bypass)
-- `flask==3.1.0` - Latest stable version
-- `werkzeug==3.1.3` - Required for security functions
+## Secrets
 
-### ✅ 6. CSRF Protection
-**File:** `app.py`
-**Fix:** Added Flask-WTF CSRF protection
-- Configured for all state-changing endpoints
-- Exempted API endpoints (use custom headers instead)
+- The Gemini API key is entered in Settings and saved to `./data/settings.json`
+  with owner-only permissions. It is never logged and never sent back to the
+  page; the page only learns whether a key is set.
+- `.env` is ignored by git and by the Docker build context. Only values that
+  differ from the defaults are saved from the page.
 
-### ✅ 7. Rate Limiting
-**File:** `app.py`
-**Fix:** Added Flask-Limiter
-- Upload: 10 per hour
-- AI Analysis: 20 per hour
-- Global: 200 per day, 50 per hour
-- Health/status: No limits
+## Input handling
 
-### ✅ 8. Security Headers
-**File:** `app.py`
-**Fix:** Added Flask-Talisman
-- Content Security Policy (CSP)
-- X-Frame-Options: DENY
-- X-Content-Type-Options: nosniff
-- Strict-Transport-Security (when HTTPS enabled)
+- Uploads are limited to 500 MB and to audio and video extensions, stored under
+  a sanitised name, transcribed, and deleted. Transcripts are served from the
+  outputs folder only, with a real-path check against traversal.
+- Everything the page shows that came from the server, a setting or a model is
+  written as text, never as markup. The analysis renderer escapes markdown
+  before it emits any tag.
+- The container runs as an unprivileged user, so a flaw in a media decoder does
+  not have root inside it.
+- Rate limits apply to uploads and analyses.
 
-## Setup Required
+## Known limits
 
-### 1. Rebuild Docker Images
-```bash
-docker compose -f docker-compose.gpu.yml down
-docker compose -f docker-compose.gpu.yml build --no-cache
-docker compose -f docker-compose.gpu.yml up -d
-```
+- The prompt-injection filter removes a few phrases and adds a safety prefix. A
+  hostile recording can still steer a summary; that is a property of language
+  models, not something this code can close.
+- Decoding untrusted audio is a risk by nature. Keep the image rebuilt so the
+  system packages stay current.
+- The app runs on Werkzeug's development server, which suits a personal tool on
+  localhost and is not meant for the open internet.
 
-### 2. Set SECRET_KEY (Recommended)
-Add to `.env` file:
-```bash
-SECRET_KEY=your-long-random-secret-key-here
-```
+## Reporting
 
-Generate a secure key:
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-## Remaining Recommendations (Optional)
-
-### Medium Priority:
-1. **Content-based file validation** - Add python-magic for MIME type checking
-2. **Container security** - Run as non-root user
-3. **Logging** - Add security event logging
-
-### Low Priority:
-1. **Secrets management** - Use Docker secrets instead of env vars
-2. **Container health checks** - Add to transcription service
-3. **CORS configuration** - Restrict allowed origins
-
-## Security Best Practices
-
-### DO:
-- ✅ Keep dependencies updated regularly
-- ✅ Review logs for suspicious activity
-- ✅ Use HTTPS in production (set `force_https=True` in Talisman)
-- ✅ Rotate API keys periodically
-- ✅ Monitor rate limit violations
-
-### DON'T:
-- ❌ Commit `.env` files to version control
-- ❌ Share API keys in logs or error messages
-- ❌ Run containers as root in production
-- ❌ Disable security features in production
-- ❌ Use default SECRET_KEY in production
-
-## Testing Security Fixes
-
-### Test Path Traversal Protection:
-```bash
-# Should fail with 403
-curl http://localhost:8080/download/..%2F..%2Fetc%2Fpasswd
-```
-
-### Test Rate Limiting:
-```bash
-# Upload 11 times in an hour - should fail on 11th
-for i in {1..11}; do curl -F "file=@test.mp3" http://localhost:8080/upload; done
-```
-
-### Test File Size Limit:
-```bash
-# Should fail with 413
-dd if=/dev/zero of=large.mp3 bs=1M count=501
-curl -F "file=@large.mp3" http://localhost:8080/upload
-```
-
-## CVE References
-
-- **CVE-2025-32434** (PyTorch): Remote Code Execution via malicious model files
-- **CVE-2024-35195** (Requests): Certificate validation bypass in session reuse
-
-## Security Audit Report
-
-Full audit report available from security analysis showing 26 issues:
-- 6 Critical (All Fixed ✓)
-- 8 Medium (2 Fixed, 6 Recommended)
-- 12 Low (Best practices documented)
-
-## Contact
-
-For security concerns or to report vulnerabilities:
-- Review code before deploying to production
-- Keep all dependencies updated
-- Monitor security advisories for used libraries
+If you find a problem, open an issue on the repository.

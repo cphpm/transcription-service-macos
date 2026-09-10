@@ -1,0 +1,7 @@
+# Only what the Dockerfiles copy is sent to the build. Everything else in the
+# folder, including .env, saved settings, transcripts and uploads, stays out.
+*
+!app.py
+!templates
+!requirements.txt
+!requirements-docker.txt

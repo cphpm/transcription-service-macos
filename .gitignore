@@ -11,8 +11,8 @@ ENV/
 dist/
 build/
 
-# Docker
-.dockerignore
+# Personal Claude Code permissions for this folder
+.claude/settings.local.json
 
 # MacOS
 .DS_Store

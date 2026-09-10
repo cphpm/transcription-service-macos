@@ -3,1745 +3,1420 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audio/Video Transcription with Speaker Detection</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <!-- Tells the browser to draw its own chrome (scrollbars, form controls not
+         otherwise styled) dark, matching the only palette the page offers. -->
+    <meta name="color-scheme" content="dark">
+    <title>Transcription Service</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v={{ favicon_version }}">
     <style>
         /*
-         * Dark Charcoal Theme - Sophisticated & Professional
-         * Inspired by: Premium dark interfaces, Spotify, Apple Music
-         * Background: #1E1E1E (Deep Charcoal) - Elegant & modern
-         * Accent: #8B5CF6 (Purple) - Premium highlight
-         * Philosophy: Dark elegance with vibrant accents
+         * "Dusk", the palette shared with the YouTube downloader: a cold indigo
+         * ground under a warm apricot accent, the one complementary pairing in
+         * the set, which is why the primary action reads from across the room.
+         * Every colour on the page is one of these tokens, so the whole app
+         * follows from this block.
+         *
+         * The surfaces are glass rather than paint: translucent, blurred, and
+         * lit along the top edge. The body's two fixed accent blooms are what
+         * they blur, which is why the effect is visible even though nothing
+         * scrolls underneath.
          */
-
         :root {
-            --color-primary: #8B5CF6;
-            --color-primary-dark: #7C3AED;
-            --color-primary-light: #A78BFA;
-            --color-accent-pink: #EC4899;
-            --color-accent-teal: #14B8A6;
-            --color-dark: #1E1E1E;
-            --color-text-primary: #FFFFFF;
-            --color-text-secondary: #B4B4B4;
-            --color-text-tertiary: #8A8A8A;
-            --color-bg-primary: #1E1E1E;
-            --color-bg-secondary: #2A2A2A;
-            --color-bg-tertiary: #353535;
-            --color-border: #404040;
-            --color-success: #10B981;
-            --color-warning: #F59E0B;
-            --color-error: #EF4444;
+            --bg: #12141F;
+            --bg-raised: #1A1D2C;
+            --bg-input: #232739;
+            --border: rgba(160, 176, 224, .16);
+            --border-strong: rgba(160, 176, 224, .30);
+            --text: #EAECF5;
+            --text-dim: #9CA2BC;
+            --text-faint: #6C7290;
+            --accent: #FF9E64;
+            --accent-hover: #FFB183;
+            --accent-wash: rgba(255, 158, 100, .20);
+            /* Apricot is far too light to carry white text: every filled accent
+               surface takes its label colour from here instead. */
+            --accent-text: #2A1405;
+            --link: #FFB183;
+            --danger: #FF5D5D;
+            --danger-wash: rgba(255, 93, 93, .14);
+            --success: #5FD08A;
+            --success-wash: rgba(95, 208, 138, .14);
+            /* Yellow, not amber: the accent already owns orange, and a warning
+               that matches the primary button is not a warning. */
+            --warn: #FFD166;
+            --warn-wash: rgba(255, 209, 102, .14);
+            --focus-ring: rgba(255, 177, 131, .55);
+            --hover-tint: rgba(190, 205, 255, .08);
+            --active-tint: rgba(190, 205, 255, .14);
+            --shadow-control: 0 1px 2px rgba(4, 5, 12, .55);
+            --shadow-card: 0 1px 1px rgba(4, 5, 12, .28), 0 8px 24px -8px rgba(4, 5, 12, .6);
+            --shadow-modal: 0 12px 40px -8px rgba(4, 5, 12, .7);
+            /* The specular top edge. On glass this is the light catching the
+               rim, and it is what stops a translucent panel reading as a flat
+               wash. */
+            --inset-highlight: inset 0 1px 0 rgba(214, 226, 255, .11);
+            --radius-xs: 6px;
+            --radius-sm: 8px;
+            --radius: 12px;
+            --radius-lg: 16px;
+            --blur: 22px;
+
+            /* The working glow. Warm-to-cool-to-warm so it sweeps through the
+               accent rather than fighting it, and no green or yellow: those
+               mean something elsewhere on the page. */
+            --siri-1: #FF9E64;
+            --siri-2: #FF6FA5;
+            --siri-3: #A78BFA;
+            --siri-4: #5B9DF9;
+
+            color-scheme: dark;
         }
 
-        * {
+        /* Registering the angle is what makes it animatable; an unregistered
+           custom property is a string, and a string cannot be interpolated. */
+        @property --siri-angle {
+            syntax: "<angle>";
+            initial-value: 0deg;
+            inherits: false;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            height: 100%;
             margin: 0;
-            padding: 0;
-            box-sizing: border-box;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
-            background: var(--color-bg-primary);
-            min-height: 100vh;
-            padding: 20px;
-            color: var(--color-text-primary);
-            line-height: 1.6;
-        }
-
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: var(--color-bg-secondary);
-            border-radius: 16px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-            overflow: hidden;
-            border: 1px solid var(--color-border);
-        }
-
-        /* Header */
-        .header {
-            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
-            color: white;
-            padding: 48px 40px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+            /* Two faint accent-tinted blooms that never move give the window
+               the quiet depth of a vibrancy material. */
             background:
-                radial-gradient(circle at 20% 50%, rgba(236, 72, 153, 0.2) 0%, transparent 50%),
-                radial-gradient(circle at 80% 80%, rgba(20, 184, 166, 0.15) 0%, transparent 50%);
-            pointer-events: none;
-        }
-
-        .header h1 {
-            font-size: 2.5em;
-            font-weight: 700;
-            margin-bottom: 12px;
-            position: relative;
-            letter-spacing: -0.02em;
-        }
-
-        .header p {
-            font-size: 1.1em;
-            opacity: 0.9;
-            position: relative;
-            font-weight: 400;
-        }
-
-        /* Content */
-        .content {
-            padding: 40px;
-        }
-
-        /* Upload Area */
-        .upload-area {
-            border: 2px dashed var(--color-border);
-            border-radius: 12px;
-            padding: 60px 20px;
-            text-align: center;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            background: var(--color-bg-tertiary);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .upload-area::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            border-radius: 50%;
-            background: var(--color-primary-light);
-            transform: translate(-50%, -50%);
-            transition: width 0.6s ease, height 0.6s ease;
-            z-index: 0;
-            pointer-events: none;
-        }
-
-        .upload-area:hover::before {
-            width: 400px;
-            height: 400px;
-        }
-
-        .upload-area:hover {
-            border-color: var(--color-primary);
-            background: var(--color-bg-secondary);
-            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
-        }
-
-        .upload-area.drag-over {
-            border-color: var(--color-accent-pink);
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(236, 72, 153, 0.1) 100%);
-            transform: scale(1.01);
-        }
-
-        .upload-icon {
-            font-size: 4em;
-            margin-bottom: 20px;
-            position: relative;
-            z-index: 1;
-            filter: grayscale(0.3);
-        }
-
-        .upload-text {
-            font-size: 1.3em;
-            color: var(--color-text-primary);
-            margin-bottom: 10px;
-            font-weight: 600;
-            position: relative;
-            z-index: 1;
-        }
-
-        .upload-subtext {
-            color: var(--color-text-secondary);
-            font-size: 0.95em;
-            position: relative;
-            z-index: 1;
-        }
-
-        #fileInput {
-            display: none;
-        }
-
-        /* ----- Drop zone once a file is chosen ----- */
-        .upload-selected {
-            display: none;
-            align-items: center;
-            gap: 16px;
-            text-align: left;
-            position: relative;
-            z-index: 1;
-        }
-
-        .upload-area.has-file {
-            padding: 20px 24px;
-            border-style: solid;
-            border-color: var(--color-primary);
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(20, 184, 166, 0.08) 100%);
-        }
-
-        .upload-area.has-file .upload-idle {
-            display: none;
-        }
-
-        .upload-area.has-file .upload-selected {
+                radial-gradient(1100px 620px at 14% -8%, var(--accent-wash), transparent 60%),
+                radial-gradient(900px 560px at 100% 108%, var(--accent-wash), transparent 55%),
+                var(--bg);
+            color: var(--text);
+            font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
         }
 
-        /* The hover ripple is for the empty state only. */
-        .upload-area.has-file:hover::before {
-            width: 0;
-            height: 0;
+        button, input, select, textarea { font: inherit; color: inherit; }
+        button { cursor: pointer; }
+        h1, h2, h3, h4 { margin: 0; font-weight: 600; }
+
+        ::selection { background: var(--accent); color: var(--accent-text); }
+
+        /* Thin, self-effacing scrollbars rather than the chunky platform default. */
+        ::-webkit-scrollbar { width: 11px; height: 11px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+            background-color: var(--border-strong);
+            border-radius: 20px;
+            border: 3px solid transparent;
+            background-clip: padding-box;
+        }
+        ::-webkit-scrollbar-thumb:hover { background-color: var(--text-faint); }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: .001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: .001ms !important;
+            }
         }
 
-        .upload-area.has-file:hover {
-            border-color: var(--color-primary-light);
+        /* ---------- the working glow ---------- */
+
+        /* A conic gradient turning behind the brand tile, blurred so only its
+           bloom escapes past the edge. It means exactly one thing: the app is
+           working, on a transcription or an analysis. */
+        .glow { position: relative; display: inline-flex; }
+
+        .glow::before {
+            content: "";
+            position: absolute;
+            inset: -3px;
+            z-index: -1;
+            border-radius: calc(var(--radius-sm) + 3px);
+            background: conic-gradient(from var(--siri-angle),
+                var(--siri-1), var(--siri-2), var(--siri-3), var(--siri-4), var(--siri-1));
+            filter: blur(9px);
+            opacity: 0;
+            transition: opacity .38s ease;
+            pointer-events: none;
         }
 
-        .upload-selected-icon {
-            font-size: 1.9em;
-            line-height: 1;
-            flex-shrink: 0;
+        /* The animation lives here rather than on the base rule: an invisible
+           element spinning a blurred gradient forever still costs paint. */
+        .is-thinking .glow::before {
+            opacity: .95;
+            animation: siri-turn 1.6s linear infinite;
+            filter: blur(12px);
         }
 
-        .upload-selected-body {
-            min-width: 0;
+        @keyframes siri-turn { to { --siri-angle: 360deg; } }
+
+        @media (prefers-reduced-motion: reduce) {
+            .is-thinking .glow::before { opacity: .8; }
+        }
+
+        /* ---------- focus ---------- */
+
+        button, [tabindex] { outline: none; }
+        input, select, textarea { outline: none; }
+
+        button:focus-visible, .seg-btn:focus-visible,
+        .seg input:focus-visible + .seg-btn {
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+        input:focus-visible, select:focus-visible, textarea:focus-visible,
+        input:focus, select:focus, textarea:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        /* ---------- top bar ---------- */
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 16px;
+            /* Glass, not a painted toolbar tone. Solid fallback first;
+               color-mix() is dropped whole in an engine that cannot parse it. */
+            background: var(--bg-raised);
+            background: color-mix(in srgb, var(--bg-raised) 70%, transparent);
+            backdrop-filter: blur(var(--blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+            box-shadow: 0 1px 0 var(--border), 0 8px 20px -12px rgba(4, 5, 12, .45),
+                        var(--inset-highlight);
+            flex: 0 0 auto;
+            position: relative;
+            z-index: 5;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--text);
+            white-space: nowrap;
+        }
+        .brand svg {
+            width: 27px;
+            height: 27px;
+            padding: 5px;
+            box-sizing: border-box;
+            color: var(--accent-text);
+            background: linear-gradient(150deg, var(--accent-hover), var(--accent));
+            border-radius: 8px;
+            box-shadow: var(--shadow-control), var(--inset-highlight);
+        }
+
+        .topbar-note {
             flex: 1;
-        }
-
-        .upload-selected-label {
-            color: var(--color-accent-teal);
-            font-size: 0.8em;
-            font-weight: 600;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            margin-bottom: 4px;
-        }
-
-        .upload-selected-name {
-            color: var(--color-text-primary);
-            font-size: 1.15em;
-            font-weight: 600;
+            min-width: 0;
+            margin: 0;
+            text-align: center;
+            color: var(--text-faint);
+            font-size: 12.5px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
 
-        .upload-selected-meta {
-            color: var(--color-text-secondary);
-            font-size: 0.9em;
-            white-space: nowrap;
-            flex-shrink: 0;
-        }
-
-        .upload-change-btn {
-            padding: 8px 16px;
-            border: 1px solid var(--color-border);
-            border-radius: 8px;
-            background: var(--color-bg-secondary);
-            color: var(--color-text-secondary);
-            font-size: 0.9em;
-            font-weight: 600;
-            cursor: pointer;
-            flex-shrink: 0;
-            transition: all 0.2s ease;
-        }
-
-        .upload-change-btn:hover {
-            border-color: var(--color-primary);
-            color: var(--color-text-primary);
-        }
-
-        @media (max-width: 600px) {
-            .upload-selected {
-                flex-wrap: wrap;
-                row-gap: 12px;
-            }
-
-            .upload-selected-body {
-                flex: 1 1 180px;
-            }
-
-            .upload-change-btn {
-                margin-left: auto;
-            }
-        }
-
-        /* Selectors */
-        .selector-card {
-            margin-top: 16px;
-            padding: 16px 18px;
-            background: var(--color-bg-tertiary);
-            border-radius: 12px;
-            border: 1px solid var(--color-border);
-        }
-
-        .selector-card h4 {
-            margin: 0 0 12px 0;
-            color: var(--color-text-primary);
-            font-size: 1em;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-size: 0.85em;
-        }
-
-        .language-select {
-            width: 100%;
-            padding: 11px 14px;
-            background: var(--color-bg-secondary);
-            border: 2px solid var(--color-border);
-            border-radius: 8px;
-            color: var(--color-text-primary);
-            font-size: 0.95em;
-            font-weight: 600;
-            cursor: pointer;
-        }
-
-        .language-select:focus {
-            outline: none;
-            border-color: var(--color-primary);
-        }
-
-        .selector-note {
-            margin: 8px 0 0;
-            color: var(--color-text-tertiary);
-            font-size: 0.82em;
-        }
-
-        /* Settings */
-        .settings-container {
-            margin-top: 32px;
-            padding-top: 24px;
-            border-top: 1px solid var(--color-border);
-        }
-
-        .settings-container summary {
-            cursor: pointer;
-            font-size: 1.15em;
-            font-weight: 600;
-            color: var(--color-text-primary);
-        }
-
-        .settings-field {
-            margin-top: 14px;
-        }
-
-        .settings-field label {
-            display: block;
-            margin-bottom: 6px;
-            font-size: 0.9em;
-            font-weight: 600;
-            color: var(--color-text-primary);
-        }
-
-        .settings-input {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 10px 12px;
-            background: var(--color-bg-secondary);
-            border: 2px solid var(--color-border);
-            border-radius: 8px;
-            color: var(--color-text-primary);
-            font-size: 0.95em;
-        }
-
-        .settings-input:focus {
-            outline: none;
-            border-color: var(--color-primary);
-        }
-
-        .settings-input.invalid {
-            border-color: #ef4444;
-        }
-
-        .settings-error {
-            color: #f87171;
-        }
-
-        .settings-actions {
-            margin-top: 18px;
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .context-note {
-            margin: 14px 0 0;
-            padding: 10px 12px;
-            border-radius: 8px;
-            border: 1px solid var(--color-warning);
-            background: rgba(245, 158, 11, 0.12);
-            color: var(--color-text-secondary);
-            font-size: 0.85em;
-            line-height: 1.5;
-        }
-
-        .context-note.fits {
-            border-color: var(--color-border);
-            background: var(--color-bg-tertiary);
-            color: var(--color-text-tertiary);
-        }
-
-        .engine-note {
-            margin: 8px 0 0;
-            color: rgba(255, 255, 255, 0.75);
-            font-size: 0.85em;
-        }
-
-        .status .status-warning {
-            display: block;
-            margin-top: 6px;
-            font-size: 0.9em;
-            opacity: 0.95;
-        }
-
-        .options-grid {
+        .icon-btn {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-            gap: 10px;
-        }
-
-        .option {
-            position: relative;
-        }
-
-        .option input[type="radio"] {
-            position: absolute;
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .option-label {
-            display: flex;
-            flex-direction: row;
-            align-items: center;
-            gap: 12px;
-            padding: 11px 14px;
-            background: var(--color-bg-secondary);
-            border: 2px solid var(--color-border);
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            text-align: left;
-            height: 100%;
-        }
-
-        .option input[type="radio"]:checked + .option-label {
-            border-color: var(--color-primary);
-            background: rgba(139, 92, 246, 0.15);
-            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
-        }
-
-        .option-label:hover {
-            border-color: var(--color-primary);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-        }
-
-        .option input[type="radio"]:disabled + .option-label {
-            cursor: not-allowed;
-            opacity: 0.5;
-        }
-
-        .option input[type="radio"]:disabled + .option-label:hover {
-            transform: none;
-            border-color: var(--color-border);
-        }
-
-        .option-icon {
-            font-size: 1.55em;
-            line-height: 1;
-            flex-shrink: 0;
-        }
-
-        .option-text {
-            min-width: 0;
-        }
-
-        .option-name {
-            font-weight: 600;
-            color: var(--color-text-primary);
-            font-size: 0.95em;
-        }
-
-        .option input[type="radio"]:checked + .option-label .option-name {
-            color: var(--color-primary);
-        }
-
-        .option-description {
-            font-size: 0.8em;
-            color: var(--color-text-secondary);
-            margin-top: 1px;
-        }
-
-        .option-speed {
-            font-size: 0.78em;
-            font-weight: 600;
-            margin-top: 2px;
-        }
-
-        /* File Info */
-        .file-info {
-            margin-top: 24px;
-            padding: 20px;
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.05) 0%, rgba(236, 72, 153, 0.05) 100%);
-            border-radius: 12px;
-            border: 1px solid var(--color-border);
-            border-left: 3px solid var(--color-primary);
-            display: none;
-            animation: slideIn 0.3s ease-out;
-        }
-
-        .file-info.show {
-            display: block;
-        }
-
-        .file-info strong {
-            color: var(--color-text-primary);
-        }
-
-        .file-info #fileName {
-            color: var(--color-primary-light);
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        /* Buttons */
-        .btn {
-            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
-            color: white;
-            border: none;
-            padding: 14px 32px;
-            border-radius: 10px;
-            font-size: 1em;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 16px;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .btn::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.2);
-            transform: translate(-50%, -50%);
-            transition: width 0.6s ease, height 0.6s ease;
-        }
-
-        .btn:hover::before {
-            width: 300px;
-            height: 300px;
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
-        }
-
-        .btn:active {
-            transform: translateY(0);
-        }
-
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .cancel-btn {
-            background: linear-gradient(135deg, var(--color-accent-pink) 0%, #DB2777 100%);
-            box-shadow: 0 4px 12px rgba(236, 72, 153, 0.3);
-            margin-left: 8px;
-        }
-
-        .cancel-btn:hover {
-            box-shadow: 0 6px 20px rgba(236, 72, 153, 0.4);
-            transform: translateY(-2px);
-        }
-
-        .button-group {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-top: 16px;
-        }
-
-        /* Status Messages */
-        .status {
-            margin-top: 24px;
-            padding: 16px 20px;
-            border-radius: 8px;
-            display: none;
-            font-weight: 500;
-            animation: slideIn 0.3s ease-out;
-            border-left: 4px solid;
-        }
-
-        .status.show {
-            display: block;
-        }
-
-        .status.processing {
-            background: rgba(245, 158, 11, 0.15);
-            color: #FCD34D;
-            border-left-color: var(--color-warning);
-        }
-
-        .status.success {
-            background: rgba(16, 185, 129, 0.15);
-            color: #6EE7B7;
-            border-left-color: var(--color-success);
-        }
-
-        .status.warning {
-            background: rgba(245, 158, 11, 0.15);
-            color: #FCD34D;
-            border-left-color: var(--color-warning);
-        }
-
-        .status.error {
-            background: rgba(239, 68, 68, 0.15);
-            color: #FCA5A5;
-            border-left-color: var(--color-error);
-        }
-
-        .spinner {
-            display: inline-block;
-            width: 18px;
-            height: 18px;
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            border-radius: 50%;
-            border-top-color: var(--color-primary);
-            animation: spin 0.8s linear infinite;
-            margin-right: 10px;
-            vertical-align: middle;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Progress Bar */
-        .progress-container {
-            margin-top: 24px;
-            display: none;
-            animation: slideIn 0.3s ease-out;
-        }
-
-        .progress-container.show {
-            display: block;
-        }
-
-        .progress-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-
-        .timer {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 1.1em;
-            color: var(--color-text-primary);
-            font-weight: 600;
-            font-variant-numeric: tabular-nums;
-        }
-
-        .progress-bar-outer {
-            width: 100%;
+            place-items: center;
+            width: 32px;
             height: 32px;
-            background: var(--color-bg-secondary);
-            border-radius: 16px;
-            overflow: hidden;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.06);
-            position: relative;
-            border: 1px solid var(--color-border);
+            flex: 0 0 auto;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: var(--radius-sm);
+            color: var(--text-dim);
+            transition: background-color .15s, color .15s, transform .1s;
         }
+        .icon-btn:hover { background: var(--hover-tint); color: var(--text); }
+        .icon-btn:active { background: var(--active-tint); transform: scale(.94); }
 
-        .progress-bar-inner {
-            height: 100%;
-            background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-accent-pink) 50%, var(--color-accent-teal) 100%);
-            background-size: 200% 100%;
-            animation: shimmer 3s linear infinite;
-            border-radius: 16px;
-            transition: width 0.3s ease;
-            position: relative;
-            min-width: 50px;
-            box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+        /* ---------- buttons ---------- */
+
+        .btn {
+            padding: 8px 15px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            box-shadow: var(--shadow-control), var(--inset-highlight);
+            white-space: nowrap;
+            font-weight: 500;
+            transition: background-color .15s, border-color .15s, opacity .15s, transform .08s;
         }
+        .btn:hover:not(:disabled) { filter: brightness(1.12); }
+        .btn:active:not(:disabled) { transform: scale(.97); }
 
-        @keyframes shimmer {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
+        .btn.primary {
+            background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+            border-color: var(--accent);
+            color: var(--accent-text);
+            font-weight: 600;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 16px -6px var(--accent-wash), var(--inset-highlight);
         }
-
-        .progress-percentage {
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            font-weight: 700;
-            color: var(--color-text-secondary);
-            font-size: 0.85em;
-            z-index: 1;
-            pointer-events: none;
-            text-shadow: 0 1px 2px rgba(255,255,255,0.5);
+        .btn.primary:hover:not(:disabled) {
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
+            filter: none;
         }
+        .btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+        .btn.block { width: 100%; }
+        .btn.sm { padding: 5px 11px; font-size: 12.5px; }
 
-        .progress-detail {
-            margin-top: 10px;
-            min-height: 1.2em;
-            font-size: 0.9em;
-            color: var(--color-text-secondary);
-            font-variant-numeric: tabular-nums;
+        /* Stop recording is the one destructive-looking control on the page,
+           and red is what a recorder's stop button is expected to be. */
+        .btn.rec-btn-stop {
+            background: linear-gradient(180deg, #FF7B7B, var(--danger));
+            border-color: var(--danger);
+            color: #2A0808;
+            font-weight: 600;
         }
+        .btn.rec-btn-stop:hover:not(:disabled) { filter: brightness(1.06); }
 
-        .progress-stages {
-            margin-top: 16px;
+        .link-btn {
+            background: none;
+            border: 0;
+            padding: 0;
+            color: var(--text-faint);
+            font-size: 12px;
+            font-weight: 500;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .link-btn:hover { color: var(--link); text-decoration: underline; }
+        .link-btn:disabled { color: var(--text-faint); text-decoration: none; cursor: default; }
+        /* A link that is part of a sentence in a notice. */
+        .notice .link-btn { font-size: inherit; color: var(--link); text-decoration: underline; }
+        .notice .link-btn:disabled { color: var(--text-faint); text-decoration: none; }
+
+        /* The UA stylesheet hides [hidden] with `display: none`, which any
+           author rule setting `display` silently outranks. Stated once with
+           !important, `element.hidden = true` means what it says everywhere. */
+        [hidden] { display: none !important; }
+
+        /* ---------- layout ---------- */
+
+        #main { flex: 1; min-height: 0; display: flex; }
+
+        .workspace {
+            flex: 1;
+            min-height: 0;
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-            gap: 8px;
+            grid-template-columns: minmax(0, 1fr) 400px;
+            grid-template-rows: minmax(0, 1fr);
+            gap: 18px;
+            padding: 18px;
         }
 
-        .stage {
+        .col-main {
+            min-width: 0;
+            min-height: 0;
             display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 12px;
-            border-radius: 6px;
-            background: var(--color-bg-tertiary);
-            transition: all 0.3s ease;
-            font-size: 0.85em;
-            border: 1px solid var(--color-border);
+            flex-direction: column;
+            gap: 18px;
+            overflow-y: auto;
         }
 
-        .stage.active {
-            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
-            color: white;
-            font-weight: 600;
-            border-color: var(--color-primary);
-            box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
-        }
+        /* ---------- empty state ---------- */
 
-        .stage.completed {
-            background: linear-gradient(135deg, rgba(20, 184, 166, 0.2) 0%, rgba(20, 184, 166, 0.15) 100%);
-            color: #5EEAD4;
-            border-color: var(--color-accent-teal);
+        .empty {
+            flex: 1;
+            display: grid;
+            place-items: center;
+            padding: 24px;
         }
+        /* Gone the moment there is something to read. */
+        .col-main:has(.transcript-container.show) .empty,
+        .col-main:has(.ai-results:not([hidden])) .empty { display: none; }
 
-        /* A step the server will not run for this job, such as Speakers with
-           identification off. Never lit, and not painted as completed either. */
-        .stage.skipped {
-            opacity: 0.45;
-        }
+        .empty-inner { max-width: 460px; text-align: center; }
+        .empty-inner h1 { font-size: 27px; margin-bottom: 10px; letter-spacing: -0.03em; }
+        .empty-inner p { color: var(--text-dim); margin: 0 0 18px; }
 
-        /* Transcript */
-        .transcript-container {
-            margin-top: 32px;
-            display: none;
-            animation: slideIn 0.3s ease-out;
-        }
-
-        .transcript-container.show {
-            display: block;
-        }
-
-        .transcript-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0;
-            padding: 20px 24px;
-            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
-            border-radius: 12px 12px 0 0;
-            color: white;
-        }
-
-        .transcript-header h3 {
+        .empty-points {
+            list-style: none;
+            padding: 0;
             margin: 0;
-            font-size: 1.1em;
-            font-weight: 600;
+            text-align: left;
+            display: inline-block;
+            color: var(--text-dim);
+        }
+        .empty-points li { padding: 5px 0 5px 22px; position: relative; }
+        .empty-points li::before {
+            content: "";
+            position: absolute;
+            left: 4px; top: 12px;
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            background: var(--accent);
         }
 
-        .copy-group {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
+        /* ---------- the microphone mark ---------- */
 
-        .copy-btn {
-            background: rgba(255, 255, 255, 0.15);
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 8px 20px;
-            border-radius: 6px;
-            font-size: 0.9em;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            font-weight: 600;
+        /* The brand mark, large. It heads the empty state, moves under the
+           transcript once there is one, and goes when the analysis arrives.
+           Its glow is the same working signal as the tile in the top bar. */
+        .mark { display: flex; justify-content: center; }
+        .mark svg {
+            width: 64px;
+            height: 64px;
+            padding: 14px;
+            box-sizing: border-box;
+            color: var(--accent-text);
+            background: linear-gradient(150deg, var(--accent-hover), var(--accent));
+            border-radius: 18px;
+            box-shadow: var(--shadow-card), var(--inset-highlight);
+        }
+        .mark .glow::before {
+            inset: -7px;
+            border-radius: 25px;
+            filter: blur(16px);
+        }
+        .is-thinking .mark .glow::before { filter: blur(20px); }
+        .empty-inner .mark { margin-bottom: 22px; }
+
+        .mark-after { display: none; padding: 4px 0; }
+        .col-main:has(.transcript-container.show) .mark-after { display: flex; }
+        .col-main:has(.ai-results:not([hidden])) .mark-after { display: none; }
+
+        /* ---------- result cards ---------- */
+
+        .card {
+            flex: 0 0 auto;
+            background: var(--bg-raised);
+            background: color-mix(in srgb, var(--bg-raised) 74%, transparent);
+            backdrop-filter: blur(var(--blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-card), var(--inset-highlight);
+            animation: rise .22s cubic-bezier(.2, .8, .3, 1);
+        }
+        .transcript-container:not(.show) { display: none; }
+
+        .card-head {
             display: flex;
             align-items: center;
-            gap: 6px;
-            backdrop-filter: blur(10px);
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
         }
-
-        .copy-btn:hover {
-            background: rgba(255, 255, 255, 0.25);
-            transform: translateY(-1px);
-        }
-
-        .copy-btn:active {
-            transform: translateY(0);
-        }
-
-        .copy-btn.copied {
-            background: var(--color-accent-teal);
-            border-color: var(--color-accent-teal);
-            color: white;
-        }
+        .card-head h2 { font-size: 15px; letter-spacing: -0.01em; }
+        .card-body { padding: 14px 16px 16px; }
 
         .transcript {
-            padding: 32px;
-            background: var(--color-bg-tertiary);
-            border-radius: 0 0 12px 12px;
-            max-height: 500px;
+            max-height: min(62vh, 680px);
             overflow-y: auto;
-            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            padding: 11px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            box-shadow: var(--inset-highlight);
+            color: var(--text);
+            font-size: 13.5px;
+            line-height: 1.65;
             white-space: pre-wrap;
-            line-height: 1.8;
-            font-size: 0.9em;
-            border: 1px solid var(--color-border);
-            border-top: none;
-            color: var(--color-text-secondary);
-        }
-
-        .transcript::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .transcript::-webkit-scrollbar-track {
-            background: var(--color-bg-primary);
-            border-radius: 4px;
-        }
-
-        .transcript::-webkit-scrollbar-thumb {
-            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent-pink) 100%);
-            border-radius: 4px;
-        }
-
-        .transcript::-webkit-scrollbar-thumb:hover {
-            background: linear-gradient(135deg, var(--color-accent-pink) 0%, var(--color-primary) 100%);
-        }
-
-        /* Tooltip */
-        .tooltip {
-            position: relative;
-        }
-
-        .tooltip::after {
-            content: attr(data-tooltip);
-            position: absolute;
-            bottom: 100%;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 6px 12px;
-            background: rgba(18, 24, 38, 0.95);
-            color: white;
-            border-radius: 6px;
-            font-size: 0.8em;
-            white-space: nowrap;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.2s ease;
-            margin-bottom: 8px;
-            backdrop-filter: blur(8px);
-        }
-
-        .tooltip:hover::after {
-            opacity: 1;
-        }
-
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .header h1 {
-                font-size: 2em;
-            }
-
-            .content {
-                padding: 24px;
-            }
-
-            .upload-area {
-                padding: 40px 16px;
-            }
-
-            .transcript-header {
-                flex-direction: column;
-                gap: 12px;
-                text-align: center;
-            }
-
-            .button-group {
-                justify-content: center;
-            }
-
-            .progress-stages {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        /* AI Analysis Section */
-        .ai-analysis-container {
-            margin-top: 32px;
-            padding: 32px;
-            background: var(--color-bg-tertiary);
-            border-radius: 12px;
-            border: 1px solid var(--color-border);
-            display: none;
-            animation: slideIn 0.3s ease-out;
-        }
-
-        .ai-analysis-container.show {
-            display: block;
-        }
-
-        .ai-analysis-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 24px;
-            padding-bottom: 16px;
-            border-bottom: 2px solid var(--color-border);
-        }
-
-        .ai-analysis-header h3 {
-            margin: 0;
-            font-size: 1.3em;
-            font-weight: 600;
-            color: var(--color-text-primary);
-        }
-
-        .ai-actions {
-            margin-top: 24px;
-        }
-
-        .ai-actions h4 {
-            margin: 0 0 16px 0;
-            color: var(--color-text-primary);
-            font-size: 1em;
-            font-weight: 600;
-        }
-
-        .ai-btn {
-            background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
-            min-width: 150px;
-        }
-
-        .ai-btn:hover:not(:disabled) {
-            box-shadow: 0 6px 20px rgba(124, 58, 237, 0.4);
-        }
-
-        .custom-prompt-section {
-            margin-top: 24px;
-        }
-
-        .custom-prompt-section label {
-            display: block;
-            margin-bottom: 8px;
-            color: var(--color-text-primary);
-            font-weight: 600;
-            font-size: 0.95em;
-        }
-
-        .custom-prompt-input {
-            width: 100%;
-            padding: 12px 16px;
-            background: var(--color-bg-secondary);
-            border: 2px solid var(--color-border);
-            border-radius: 8px;
-            color: var(--color-text-primary);
-            font-family: inherit;
-            font-size: 0.95em;
-            resize: vertical;
-            transition: all 0.2s ease;
-            margin-bottom: 12px;
-            box-sizing: border-box;
-        }
-
-        .custom-prompt-input:focus {
-            outline: none;
-            border-color: var(--color-primary);
-            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
-        }
-
-        .custom-prompt-input:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .ai-results {
-            margin-top: 24px;
-            background: var(--color-bg-secondary);
-            border-radius: 12px;
-            border: 1px solid var(--color-border);
-            animation: slideIn 0.3s ease-out;
-        }
-
-        .ai-results-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 20px 24px;
-            background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
-            border-radius: 12px 12px 0 0;
-            color: white;
-        }
-
-        .ai-results-header h4 {
-            margin: 0;
-            font-size: 1.1em;
-            font-weight: 600;
+            overflow-wrap: anywhere;
         }
 
         .ai-results-content {
-            padding: 32px;
-            color: var(--color-text-secondary);
-            line-height: 1.75;
-            font-size: 0.95em;
-            overflow-wrap: break-word;
-            max-height: 500px;
+            max-height: min(62vh, 680px);
             overflow-y: auto;
+            color: var(--text-dim);
+            font-size: 13.5px;
+            line-height: 1.65;
+            overflow-wrap: break-word;
         }
 
-        /* ----- Rendered markdown inside the analysis pane ----- */
+        /* ----- Rendered markdown inside the analysis card ----- */
         .ai-results-content > *:first-child { margin-top: 0; }
         .ai-results-content > *:last-child { margin-bottom: 0; }
-
-        .ai-results-content p {
-            margin: 0 0 14px;
-        }
-
+        .ai-results-content p { margin: 0 0 12px; }
         .ai-results-content h1,
         .ai-results-content h2,
         .ai-results-content h3,
         .ai-results-content h4,
         .ai-results-content h5,
         .ai-results-content h6 {
-            margin: 26px 0 10px;
-            color: var(--color-text-primary);
+            margin: 22px 0 8px;
+            color: var(--text);
             font-weight: 600;
             line-height: 1.35;
+            letter-spacing: -0.01em;
         }
-
-        .ai-results-content h1 { font-size: 1.35em; }
-        .ai-results-content h2 { font-size: 1.2em; }
-        .ai-results-content h3 { font-size: 1.08em; }
+        .ai-results-content h1 { font-size: 17px; }
+        .ai-results-content h2 { font-size: 15.5px; }
+        .ai-results-content h3 { font-size: 14.5px; }
         .ai-results-content h4,
         .ai-results-content h5,
-        .ai-results-content h6 { font-size: 1em; }
-
-        .ai-results-content strong {
-            color: var(--color-text-primary);
-            font-weight: 600;
-        }
-
+        .ai-results-content h6 { font-size: 13.5px; }
+        .ai-results-content strong { color: var(--text); font-weight: 600; }
         .ai-results-content em { font-style: italic; }
-
         .ai-results-content ul,
-        .ai-results-content ol {
-            margin: 0 0 14px;
-            padding-left: 22px;
-        }
-
-        .ai-results-content li { margin-bottom: 6px; }
-        .ai-results-content li::marker { color: var(--color-primary-light); }
-
+        .ai-results-content ol { margin: 0 0 12px; padding-left: 22px; }
+        .ai-results-content li { margin-bottom: 5px; }
+        .ai-results-content li::marker { color: var(--accent); }
         .ai-results-content li > ul,
-        .ai-results-content li > ol {
-            margin: 6px 0 0;
-        }
-
+        .ai-results-content li > ol { margin: 5px 0 0; }
         .ai-results-content code.md-inline-code {
             padding: 1px 6px;
-            border: 1px solid var(--color-border);
-            border-radius: 4px;
-            background: var(--color-bg-tertiary);
-            color: var(--color-primary-light);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-xs);
+            background: var(--bg-input);
+            color: var(--accent-hover);
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            font-size: 0.88em;
+            font-size: .88em;
         }
-
         .ai-results-content pre.md-code {
-            margin: 0 0 16px;
-            padding: 14px 16px;
-            border: 1px solid var(--color-border);
-            border-left: 3px solid var(--color-primary);
-            border-radius: 8px;
-            background: var(--color-bg-primary);
+            margin: 0 0 14px;
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: var(--radius-sm);
+            background: var(--bg-input);
             overflow-x: auto;
         }
-
         .ai-results-content pre.md-code code {
-            color: var(--color-text-primary);
+            color: var(--text);
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            font-size: 0.86em;
+            font-size: .86em;
             line-height: 1.6;
             white-space: pre;
         }
-
         .ai-results-content blockquote {
-            margin: 0 0 16px;
-            padding: 4px 0 4px 16px;
-            border-left: 3px solid var(--color-primary);
-            color: var(--color-text-tertiary);
+            margin: 0 0 14px;
+            padding: 4px 0 4px 14px;
+            border-left: 3px solid var(--accent);
+            color: var(--text-faint);
         }
-
         .ai-results-content a {
-            color: var(--color-primary-light);
+            color: var(--link);
             text-decoration: underline;
             text-underline-offset: 2px;
         }
-
-        .ai-results-content hr {
-            margin: 22px 0;
-            border: none;
-            border-top: 1px solid var(--color-border);
-        }
-
-        .ai-results-content .md-table-wrap {
-            margin: 0 0 16px;
-            overflow-x: auto;
-        }
-
-        .ai-results-content table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.92em;
-        }
-
+        .ai-results-content hr { margin: 18px 0; border: none; border-top: 1px solid var(--border); }
+        .ai-results-content .md-table-wrap { margin: 0 0 14px; overflow-x: auto; }
+        .ai-results-content table { width: 100%; border-collapse: collapse; font-size: .94em; }
         .ai-results-content th,
-        .ai-results-content td {
-            padding: 8px 12px;
-            border: 1px solid var(--color-border);
+        .ai-results-content td { padding: 7px 10px; border: 1px solid var(--border); text-align: left; }
+        .ai-results-content th { background: var(--bg-input); color: var(--text); font-weight: 600; }
+
+        /* ---------- side panel ---------- */
+
+        .col-panel {
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-raised);
+            background: color-mix(in srgb, var(--bg-raised) 74%, transparent);
+            backdrop-filter: blur(var(--blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-card), var(--inset-highlight);
+            overflow: hidden;
+        }
+
+        /* The panel's two jobs sit one under the other, each beneath a small
+           caption in the style of the downloader's list headings. */
+        .panel-section { display: flex; flex-direction: column; gap: 10px; }
+        .panel-section > * { flex: 0 0 auto; }
+        .panel-section + .panel-section {
+            margin-top: 6px;
+            padding-top: 14px;
+            border-top: 1px solid var(--border);
+        }
+        .section-head {
+            font-size: 11.5px;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            font-weight: 600;
+            color: var(--text-faint);
+        }
+
+        .panel {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 12px;
+            overflow-y: auto;
+        }
+        .panel > * { flex: 0 0 auto; }
+
+        .panel-row { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+        .panel-row.wrap { flex-wrap: wrap; }
+        .grow { flex: 1; min-width: 0; }
+
+        select {
+            appearance: none;
+            -webkit-appearance: none;
+            padding: 7px 28px 7px 10px;
+            background-color: var(--bg-input);
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239CA2BC' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            background-size: 15px;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            box-shadow: var(--inset-highlight);
+            color: var(--text);
+            max-width: 100%;
+            transition: border-color .15s, box-shadow .15s;
+        }
+        select:disabled { opacity: .5; }
+
+        .field { display: flex; flex-direction: column; gap: 6px; }
+        .field > span, .field > label { color: var(--text-dim); font-size: 12px; font-weight: 500; }
+        .field small { color: var(--text-faint); font-size: 11.5px; line-height: 1.45; }
+        .field > select { width: 100%; }
+        .field > .link-btn { align-self: flex-start; }
+
+        /* A segmented pill. Buttons switch on their own; the radio variant
+           hides the input and lets the label carry the pill, so the script
+           keeps reading ordinary radio groups. */
+        .seg {
+            position: relative;
+            display: flex;
+            background: var(--bg-input);
+            border-radius: var(--radius-sm);
+            padding: 3px;
+            gap: 3px;
+        }
+        .seg-btn {
+            flex: 1;
+            min-width: 0;
+            padding: 7px;
+            background: transparent;
+            border: 0;
+            border-radius: calc(var(--radius-sm) - 2px);
+            color: var(--text-dim);
+            font-weight: 500;
+            text-align: center;
+            transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
+        }
+        .seg-btn:hover { color: var(--text); }
+        /* A greyed-out pill explains itself when clicked; the click must not
+           select its text instead. */
+        .seg-btn { user-select: none; -webkit-user-select: none; }
+        .seg-btn.is-active,
+        .seg input:checked + .seg-btn {
+            background: var(--bg-raised);
+            color: var(--text);
+            box-shadow: var(--shadow-control), var(--inset-highlight);
+        }
+        .seg input[type="radio"] {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            margin: 0;
+            pointer-events: none;
+        }
+        label.seg-btn {
+            display: block;
+            cursor: pointer;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .seg input:disabled + .seg-btn { opacity: .45; cursor: not-allowed; }
+        .seg input:disabled + .seg-btn:hover { color: var(--text-dim); }
+
+        .notice {
+            margin: 0;
+            padding: 10px 12px;
+            background: var(--accent-wash);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-dim);
+            font-size: 12.5px;
+            line-height: 1.45;
+        }
+
+        /* Whether the transcript fits the local model's window. */
+        .context-note {
+            margin: 0;
+            padding: 10px 12px;
+            background: var(--warn-wash);
+            border: 1px solid rgba(255, 209, 102, .35);
+            border-radius: var(--radius-sm);
+            color: var(--text-dim);
+            font-size: 12.5px;
+            line-height: 1.45;
+        }
+        .context-note.fits {
+            background: var(--bg-input);
+            border-color: var(--border);
+            color: var(--text-faint);
+        }
+
+        /* ---------- status lines ---------- */
+
+        .status {
+            display: none;
+            margin: 0;
+            padding: 9px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--text-faint);
+            border-radius: var(--radius-sm);
+            color: var(--text-dim);
+            font-size: 12.5px;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
+            animation: rise .22s cubic-bezier(.2, .8, .3, 1);
+        }
+        .status.show { display: block; }
+        .status.processing { border-left-color: var(--accent); color: var(--text); }
+        .status.success { border-left-color: var(--success); color: var(--text); }
+        .status.warning { border-left-color: var(--warn); color: var(--text); }
+        .status.error { border-left-color: var(--danger); color: var(--text); }
+        .status .status-warning { display: block; margin-top: 5px; color: var(--warn); }
+
+        .spinner {
+            display: inline-block;
+            width: 13px;
+            height: 13px;
+            margin: 0 8px -2px 0;
+            border: 2px solid var(--border-strong);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ---------- source: upload ---------- */
+
+        .upload-area {
+            position: relative;
+            padding: 22px 16px;
+            text-align: center;
+            background: var(--bg-input);
+            border: 1.5px dashed var(--border-strong);
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: border-color .15s, background-color .15s;
+        }
+        .upload-area:hover { border-color: var(--accent); }
+        .upload-area.drag-over { border-color: var(--accent); background: var(--accent-wash); }
+
+        .upload-idle svg {
+            width: 30px;
+            height: 30px;
+            margin-bottom: 6px;
+            color: var(--accent);
+        }
+        .upload-text { font-weight: 600; font-size: 13.5px; }
+        .upload-subtext { margin-top: 3px; color: var(--text-faint); font-size: 11.5px; line-height: 1.4; }
+
+        #fileInput { display: none; }
+
+        /* The drop zone once a file is chosen. */
+        .upload-selected {
+            display: none;
+            align-items: center;
+            gap: 10px;
             text-align: left;
         }
+        .upload-area.has-file {
+            padding: 12px;
+            border-style: solid;
+            border-color: var(--accent);
+        }
+        .upload-area.has-file .upload-idle { display: none; }
+        .upload-area.has-file .upload-selected { display: flex; }
 
-        .ai-results-content th {
-            background: var(--color-bg-tertiary);
-            color: var(--color-text-primary);
+        .upload-selected-icon { flex: 0 0 auto; width: 22px; height: 22px; color: var(--success); }
+        .upload-selected-body { flex: 1; min-width: 0; }
+        .upload-selected-label {
+            color: var(--success);
+            font-size: 10.5px;
             font-weight: 600;
+            letter-spacing: .06em;
+            text-transform: uppercase;
         }
-
-        .ai-results-content::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .ai-results-content::-webkit-scrollbar-track {
-            background: var(--color-bg-primary);
-            border-radius: 4px;
-        }
-
-        .ai-results-content::-webkit-scrollbar-thumb {
-            background: linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%);
-            border-radius: 4px;
-        }
-
-        #aiStatus {
-            margin-top: 16px;
-        }
-
-        /* ===== INPUT MODE TABS ===== */
-        .input-mode-tabs {
-            display: flex;
-            gap: 0;
-            border-radius: 12px 12px 0 0;
+        .upload-selected-name {
+            font-size: 13px;
+            font-weight: 600;
             overflow: hidden;
-            border: 1px solid var(--color-border);
-            border-bottom: none;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
+        .upload-selected-meta { color: var(--text-faint); font-size: 11.5px; white-space: nowrap; }
 
-        .input-tab {
-            flex: 1;
-            padding: 14px 24px;
-            background: var(--color-bg-tertiary);
-            color: var(--color-text-secondary);
-            border: none;
-            cursor: pointer;
-            font-size: 1em;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            transition: all 0.2s ease;
-            border-bottom: 3px solid transparent;
-        }
+        /* ---------- source: microphone ---------- */
 
-        .input-tab:hover {
-            background: var(--color-bg-secondary);
-            color: var(--color-text-primary);
-        }
-
-        .input-tab.active {
-            background: var(--color-bg-secondary);
-            color: var(--color-primary-light);
-            border-bottom-color: var(--color-primary);
-        }
-
-        /* ===== UPLOAD PANEL ===== */
-        .upload-panel .upload-area {
-            border-radius: 0 0 12px 12px;
-            border-top: none;
-        }
-
-        /* ===== RECORDING PANEL ===== */
-        .recording-panel {
-            background: var(--color-bg-tertiary);
-            border: 1px solid var(--color-border);
-            border-top: none;
-            border-radius: 0 0 12px 12px;
-            padding: 28px 24px 24px;
-            margin-bottom: 24px;
-        }
+        .recording-panel { display: flex; flex-direction: column; gap: 10px; }
+        .recording-controls { display: flex; flex-direction: column; gap: 10px; }
 
         .recording-permission-error {
-            background: rgba(239, 68, 68, 0.12);
-            border: 1px solid var(--color-error);
-            border-radius: 8px;
-            padding: 12px 16px;
-            color: #FCA5A5;
-            font-size: 0.9em;
             display: flex;
-            align-items: flex-start;
-            gap: 10px;
-            margin-bottom: 20px;
+            gap: 8px;
+            padding: 10px 12px;
+            background: var(--danger-wash);
+            border: 1px solid rgba(255, 93, 93, .4);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            font-size: 12.5px;
+            line-height: 1.45;
         }
 
         .recording-visualizer-wrap {
-            width: 100%;
-            background: var(--color-bg-secondary);
-            border-radius: 8px;
-            border: 1px solid var(--color-border);
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            box-shadow: var(--inset-highlight);
             overflow: hidden;
-            margin-bottom: 16px;
         }
-
-        #audioVisualizer {
-            display: block;
-            width: 100%;
-            height: 64px;
-        }
+        #audioVisualizer { display: block; width: 100%; height: 64px; }
 
         .recording-meta {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 12px;
-            margin-bottom: 16px;
-            min-height: 28px;
+            gap: 10px;
+            min-height: 26px;
         }
-
         .rec-indicator {
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             background: transparent;
-            transition: background 0.3s ease;
-            flex-shrink: 0;
+            transition: background-color .3s ease;
+            flex: 0 0 auto;
         }
-
         .rec-indicator.recording {
-            background: var(--color-error);
-            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+            background: var(--danger);
+            box-shadow: 0 0 0 3px var(--danger-wash);
             animation: recPulse 1.2s ease-in-out infinite;
         }
-
         @keyframes recPulse {
             0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.5; transform: scale(0.85); }
+            50% { opacity: .5; transform: scale(.85); }
         }
-
         .rec-timer {
-            font-size: 1.4em;
-            font-weight: 700;
-            color: var(--color-text-primary);
+            font-size: 18px;
+            font-weight: 600;
             font-variant-numeric: tabular-nums;
             min-width: 48px;
             text-align: center;
-            font-family: monospace;
         }
+        .recording-btn-row { display: flex; justify-content: center; }
 
-        .recording-btn-row {
-            display: flex;
-            justify-content: center;
-        }
-
-        .rec-btn-stop {
-            background: linear-gradient(135deg, var(--color-error) 0%, #B91C1C 100%) !important;
-            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35) !important;
-        }
-
-        .rec-btn-stop:hover {
-            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45) !important;
-        }
-
-        .recording-review {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
-            animation: fadeIn 0.3s ease-out;
-        }
-
+        .recording-review { display: flex; flex-direction: column; gap: 10px; }
         .recording-review-label {
-            color: var(--color-text-secondary);
-            font-size: 0.85em;
+            color: var(--text-faint);
+            font-size: 11.5px;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.06em;
+            letter-spacing: .07em;
         }
+        .recording-review audio { width: 100%; border-radius: var(--radius-sm); }
+        .recording-review-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-        .recording-review audio {
-            width: 100%;
-            max-width: 480px;
-            border-radius: 8px;
-            accent-color: var(--color-primary);
+        /* ---------- the chosen source ---------- */
+
+        /* The drop zone already names an uploaded file, so this line is only
+           for a recording, whose player says nothing about being selected. */
+        .file-info {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            color: var(--text-dim);
+            font-size: 12.5px;
         }
-
-        .recording-review-actions {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            justify-content: center;
+        .mode-record .file-info.show { display: flex; }
+        .file-info #fileName {
+            flex: 1;
+            min-width: 0;
+            color: var(--text);
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
-
-        .rec-btn-secondary {
-            background: var(--color-bg-secondary);
-            color: var(--color-text-primary);
-            border: 2px solid var(--color-border);
-            box-shadow: none;
-            margin-top: 0;
-        }
-
-        .rec-btn-secondary:hover {
-            border-color: var(--color-primary);
-            background: var(--color-bg-tertiary);
-            box-shadow: none;
-            transform: translateY(-2px);
-        }
-
-        /* ===== SOURCE BADGE ===== */
         .source-badge {
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            font-size: 0.78em;
+            padding: 1px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border-strong);
+            background: var(--bg-input);
+            color: var(--text-dim);
+            font-size: 11px;
             font-weight: 600;
-            padding: 2px 8px;
-            border-radius: 20px;
-            margin-left: 8px;
-            vertical-align: middle;
+            white-space: nowrap;
         }
-
         .source-badge.badge-mic {
-            background: rgba(139, 92, 246, 0.15);
-            color: var(--color-primary-light);
-            border: 1px solid rgba(139, 92, 246, 0.3);
+            color: var(--accent-hover);
+            border-color: rgba(255, 158, 100, .4);
+            background: var(--accent-wash);
         }
 
-        .source-badge.badge-file {
-            background: rgba(20, 184, 166, 0.1);
-            color: var(--color-accent-teal);
-            border: 1px solid rgba(20, 184, 166, 0.25);
+        /* ---------- progress ---------- */
+
+        /* Laid out like a job in a list: title, status, a thin bar, and the
+           steps as chips underneath. */
+        .progress-container {
+            display: none;
+            padding: 10px 11px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            animation: rise .22s cubic-bezier(.2, .8, .3, 1);
+        }
+        .progress-container.show { display: block; }
+
+        .job-top { display: flex; align-items: baseline; gap: 8px; }
+        .job-title {
+            flex: 1;
+            min-width: 0;
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .job-status {
+            font-size: 11.5px;
+            color: var(--text-faint);
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(6px); }
-            to   { opacity: 1; transform: translateY(0); }
+        .bar { height: 4px; background: var(--border-strong); border-radius: 2px; margin-top: 7px; overflow: hidden; }
+        .bar > div { height: 100%; background: var(--accent); border-radius: 2px; transition: width .25s; }
+
+        .progress-detail {
+            margin: 7px 0 0;
+            min-height: 1.4em;
+            color: var(--text-dim);
+            font-size: 11.5px;
+            font-variant-numeric: tabular-nums;
         }
 
-        @media (max-width: 480px) {
-            .input-tab {
-                padding: 12px 16px;
-                font-size: 0.9em;
+        .stages { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+        .stage {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 9px 2px 7px;
+            border: 1px solid transparent;
+            border-radius: 999px;
+            background: var(--hover-tint);
+            color: var(--text-faint);
+            font-size: 11.5px;
+            font-weight: 500;
+            transition: background-color .25s, color .25s, border-color .25s;
+        }
+        .stage::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--text-faint);
+            flex: 0 0 auto;
+        }
+        .stage.active {
+            background: var(--accent-wash);
+            border-color: rgba(255, 158, 100, .35);
+            color: var(--accent-hover);
+        }
+        .stage.active::before {
+            background: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-wash);
+            animation: recPulse 1.2s ease-in-out infinite;
+        }
+        .stage.completed { color: var(--success); }
+        .stage.completed::before { background: var(--success); }
+        /* A step the server will not run for this job, such as Speakers with
+           identification off. Never lit, and not painted as completed either. */
+        .stage.skipped { opacity: .4; }
+
+        /* ---------- analysis panel ---------- */
+
+        .ai-analysis-container { display: flex; flex-direction: column; gap: 10px; }
+        .ai-analysis-container > * { flex: 0 0 auto; }
+
+        /* Shown above the controls until there is a transcript to analyse. */
+        .ai-placeholder {
+            margin: 0;
+            padding: 10px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-faint);
+            font-size: 12.5px;
+            line-height: 1.45;
+        }
+        .panel-section:has(.ai-analysis-container.show) .ai-placeholder { display: none; }
+
+        .custom-prompt-input {
+            width: 100%;
+            min-height: 72px;
+            padding: 9px 11px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            box-shadow: var(--inset-highlight);
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.5;
+            resize: vertical;
+            transition: border-color .15s, box-shadow .15s;
+        }
+        .custom-prompt-input::placeholder { color: var(--text-faint); }
+        .custom-prompt-input:disabled { opacity: .5; cursor: not-allowed; }
+
+        /* ---------- settings drawer ---------- */
+
+        .drawer-scrim {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, .28);
+            backdrop-filter: blur(3px);
+            -webkit-backdrop-filter: blur(3px);
+            z-index: 20;
+            animation: fade .18s ease-out;
+        }
+        @keyframes fade { from { opacity: 0; } }
+
+        .drawer {
+            position: fixed;
+            top: 0; right: 0; bottom: 0;
+            width: min(400px, 92vw);
+            padding: 18px;
+            /* A real vibrancy panel: translucent surface plus backdrop blur, so
+               it reads as a material floating over the workspace. */
+            background: var(--bg-raised);
+            background: color-mix(in srgb, var(--bg-raised) 88%, transparent);
+            backdrop-filter: blur(var(--blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+            border-left: 1px solid var(--border);
+            box-shadow: var(--shadow-modal);
+            z-index: 21;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            overflow-y: auto;
+            animation: slide-in .22s cubic-bezier(.2, .8, .3, 1);
+        }
+        @keyframes slide-in { from { transform: translateX(24px); opacity: 0; } }
+        .drawer > * { flex: 0 0 auto; }
+        .drawer-head { display: flex; align-items: center; justify-content: space-between; }
+        .drawer-note { margin: 0; color: var(--text-faint); font-size: 12px; line-height: 1.45; }
+
+        .settings-fields { display: flex; flex-direction: column; gap: 22px; }
+        .settings-group { display: flex; flex-direction: column; gap: 14px; }
+        .settings-group h3 {
+            font-size: 11.5px;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            font-weight: 600;
+            color: var(--text-faint);
+        }
+
+        .settings-input {
+            width: 100%;
+            padding: 8px 10px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            box-shadow: var(--inset-highlight);
+            color: var(--text);
+            font-size: 13px;
+            transition: border-color .15s, box-shadow .15s;
+        }
+        .settings-input::placeholder { color: var(--text-faint); }
+        select.settings-input { padding-right: 28px; border-color: var(--border-strong); }
+        .settings-input.invalid { border-color: var(--danger); }
+        .field small.settings-error { color: var(--danger); }
+
+        .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        /* ---------- toasts ---------- */
+
+        .toasts {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 40;
+            pointer-events: none;
+        }
+        .toast {
+            padding: 10px 16px;
+            background: var(--bg-raised);
+            background: color-mix(in srgb, var(--bg-raised) 85%, transparent);
+            backdrop-filter: blur(var(--blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+            border: 1px solid var(--border-strong);
+            border-left: 3px solid var(--text-faint);
+            border-radius: var(--radius-sm);
+            box-shadow: var(--shadow-modal);
+            max-width: 520px;
+            animation: rise .22s cubic-bezier(.2, .8, .3, 1);
+        }
+        .toast.is-error { border-left-color: var(--danger); }
+        .toast.is-success { border-left-color: var(--success); }
+        .toast.is-warn { border-left-color: var(--warn); }
+        @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+
+        /* ---------- narrow windows ---------- */
+
+        @media (max-width: 1080px) {
+            /* One scrolling column, controls first. Each block takes its own
+               content height; nothing scrolls inside anything else. */
+            .workspace {
+                display: flex;
+                flex-direction: column;
+                overflow-y: auto;
             }
-            .rec-timer {
-                font-size: 1.2em;
-            }
+            .col-panel { order: -1; flex: 0 0 auto; overflow: visible; }
+            .col-main { flex: 0 0 auto; overflow: visible; }
+            .panel { flex: 0 0 auto; overflow: visible; }
+            .empty { min-height: 40vh; }
+        }
+
+        @media (max-width: 600px) {
+            .topbar { gap: 10px; padding: 10px 12px; }
+            .topbar-note { display: none; }
+            .workspace { padding: 12px; gap: 12px; }
+            .card-head { padding: 10px 12px; }
+            .card-body { padding: 12px; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🎙️ Transcription Service</h1>
-            <p>Upload audio or video files for automatic transcription with experimental speaker identification</p>
-            <p class="engine-note">Transcribed locally with Whisper (large-v3-turbo)</p>
+    <header class="topbar">
+        <div class="brand">
+            <span class="glow">
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                    <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/>
+                    <path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3.5M9 20.5h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                </svg>
+            </span>
+            <span>Transcription Service</span>
         </div>
 
-        <div class="content">
+        <p class="topbar-note">Whisper large-v3-turbo, transcribed on this machine</p>
 
-            <!-- Input mode tab switcher -->
-            <div class="input-mode-tabs" id="inputModeTabs">
-                <button class="input-tab active" id="tabUpload">📁 Upload File</button>
-                <button class="input-tab" id="tabRecord">🎙️ Record Audio</button>
-            </div>
+        <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                <path d="M12 2.8v2.4M12 18.8v2.4M4.5 7.5l2 1.2M17.5 15.3l2 1.2M4.5 16.5l2-1.2M17.5 8.7l2-1.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+        </button>
+    </header>
 
-            <!-- Upload panel (default) -->
-            <div class="upload-panel" id="uploadPanel">
-                <div class="upload-area" id="uploadArea">
-                    <div class="upload-idle">
-                        <div class="upload-icon">📁</div>
-                        <div class="upload-text">Click to upload or drag and drop</div>
-                        <div class="upload-subtext">Supports MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM, MKV</div>
-                    </div>
-                    <div class="upload-selected">
-                        <div class="upload-selected-icon">✅</div>
-                        <div class="upload-selected-body">
-                            <div class="upload-selected-label" id="uploadSelectedLabel">File ready to transcribe</div>
-                            <div class="upload-selected-name" id="uploadSelectedName"></div>
-                        </div>
-                        <div class="upload-selected-meta" id="uploadSelectedMeta"></div>
-                        <button type="button" class="upload-change-btn" id="uploadChangeBtn">Change</button>
-                    </div>
-                    <input type="file" id="fileInput" accept="audio/*,video/*,.mkv">
-                </div>
-            </div>
+    <main id="main">
+        <section class="workspace">
 
-            <!-- Recording panel (hidden by default) -->
-            <div class="recording-panel" id="recordingPanel" style="display:none;">
+            <div class="col-main">
 
-                <!-- Permission / device error -->
-                <div class="recording-permission-error" id="recordingPermissionError" style="display:none;">
-                    <span>🚫</span>
-                    <span id="recordingPermissionMsg">Microphone access denied.</span>
-                </div>
-
-                <!-- Recording controls -->
-                <div id="recordingControls">
-                    <div class="recording-visualizer-wrap">
-                        <canvas id="audioVisualizer"></canvas>
-                    </div>
-                    <div class="recording-meta">
-                        <span class="rec-indicator" id="recIndicator"></span>
-                        <span class="rec-timer" id="recTimerDisplay">0:00</span>
-                    </div>
-                    <div class="recording-btn-row">
-                        <button class="btn" id="startRecordBtn">🎙️ Start Recording</button>
-                    </div>
-                </div>
-
-                <!-- Post-recording review -->
-                <div id="recordingReview" style="display:none;">
-                    <div class="recording-review">
-                        <div class="recording-review-label">Recording Preview</div>
-                        <audio id="recordingPlayback" controls></audio>
-                        <div class="recording-review-actions">
-                            <button class="btn" id="useRecordingBtn">✅ Use This Recording</button>
-                            <button class="btn rec-btn-secondary" id="saveRecordingBtn">💾 Save Recording</button>
-                            <button class="btn rec-btn-secondary" id="rerecordBtn">🔄 Re-record</button>
+                <div class="card transcript-container" id="transcriptContainer">
+                    <div class="card-head">
+                        <h2>Transcript</h2>
+                        <div class="panel-row wrap">
+                            <button class="btn sm" id="copyPlainBtn" title="Plain text, exactly as shown">Copy text</button>
+                            <button class="btn sm" id="downloadTextBtn" title="Save the transcript as a .txt file">Download .txt</button>
                         </div>
                     </div>
+                    <div class="card-body">
+                        <div class="transcript" id="transcript"></div>
+                    </div>
                 </div>
+
+                <!-- The microphone mark. It heads the empty state below, sits under
+                     the transcript once there is one, and goes when the analysis
+                     arrives. Its glow is the working signal from the top bar. -->
+                <div class="mark mark-after" aria-hidden="true">
+                    <span class="glow">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/>
+                            <path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3.5M9 20.5h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                        </svg>
+                    </span>
+                </div>
+
+                <div class="card ai-results" id="aiResults" hidden>
+                    <div class="card-head">
+                        <h2>Analysis</h2>
+                        <div class="panel-row wrap">
+                            <button class="btn sm" id="copyAiPlainBtn" title="Plain text, no markup">Copy plain text</button>
+                            <button class="btn sm" id="copyAiMarkdownBtn" title="Markdown source">Copy markdown</button>
+                            <button class="btn sm" id="copyAiRichBtn" title="Formatted, keeps layout in Word and Apple Notes">Copy formatted</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="ai-results-content" id="aiResultsContent"></div>
+                    </div>
+                </div>
+
+                <section class="empty" id="emptyState">
+                    <div class="empty-inner">
+                        <div class="mark" aria-hidden="true">
+                            <span class="glow">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/>
+                                    <path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3.5M9 20.5h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                                </svg>
+                            </span>
+                        </div>
+                        <h1>Transcribe a recording</h1>
+                        <p>Upload an audio or video file, or record from the microphone. The
+                           transcript appears here to read, copy and analyse.</p>
+                        <ul class="empty-points">
+                            <li>Transcribed on this machine with Whisper large-v3-turbo</li>
+                            <li>Optional speaker identification that labels who is talking</li>
+                            <li>Copy the transcript, or save it as a text file</li>
+                            <li>Summaries, insights and your own questions, from a local or cloud model</li>
+                        </ul>
+                    </div>
+                </section>
 
             </div>
 
-            <div class="selector-card">
-                <h4>
-                    <span>⚙️</span>
-                    <span>Processing Device</span>
-                </h4>
-                <div class="options-grid">
-                    <div class="option">
-                        <input type="radio" id="deviceGPU" name="device" value="cuda">
-                        <label for="deviceGPU" class="option-label">
-                            <div class="option-icon">🚀</div>
-                            <div class="option-text">
-                                <div class="option-name">NVIDIA GPU</div>
-                                <div class="option-speed" style="color: var(--color-accent-teal);">⚡ Very Fast</div>
-                            </div>
-                        </label>
-                    </div>
-                    <div class="option">
-                        <input type="radio" id="deviceCPU" name="device" value="cpu" checked>
-                        <label for="deviceCPU" class="option-label">
-                            <div class="option-icon">🖥️</div>
-                            <div class="option-text">
-                                <div class="option-name">CPU</div>
-                                <div class="option-speed" style="color: var(--color-text-tertiary);">🐢 Slower (universal)</div>
-                            </div>
-                        </label>
-                    </div>
-                </div>
-            </div>
+            <div class="col-panel">
+                <div class="panel">
 
-            <div class="selector-card">
-                <h4>
-                    <span>🗣️</span>
-                    <span>Language</span>
-                </h4>
-                <select id="languageSelect" class="language-select">
-                    <option value="auto" selected>Auto detect</option>
-                    <option value="en">English</option>
-                    <option value="da">Danish</option>
-                    <option value="sv">Swedish</option>
-                    <option value="no">Norwegian</option>
-                    <option value="de">German</option>
-                    <option value="nl">Dutch</option>
-                    <option value="fr">French</option>
-                    <option value="es">Spanish</option>
-                    <option value="it">Italian</option>
-                    <option value="pt">Portuguese</option>
-                    <option value="pl">Polish</option>
-                    <option value="fi">Finnish</option>
-                    <option value="uk">Ukrainian</option>
-                    <option value="ru">Russian</option>
-                    <option value="ar">Arabic</option>
-                    <option value="hi">Hindi</option>
-                    <option value="ja">Japanese</option>
-                    <option value="ko">Korean</option>
-                    <option value="zh">Chinese</option>
-                </select>
-                <p class="selector-note">Naming the language is more reliable than auto detection on short or noisy audio.</p>
-            </div>
+                    <!-- Transcribe -->
+                    <section class="panel-section" id="panelTranscribe" aria-labelledby="transcribeHeading">
+                        <h3 class="section-head" id="transcribeHeading">Transcribe</h3>
+                        <div class="seg" role="group" aria-label="Source">
+                            <button class="seg-btn is-active" id="tabUpload">Upload file</button>
+                            <button class="seg-btn" id="tabRecord">Record audio</button>
+                        </div>
 
-            <div class="selector-card" id="diarizationSelectorCard">
-                <h4>
-                    <span>👥</span>
-                    <span>Speaker Identification</span>
-                </h4>
-                <div class="options-grid">
-                    <div class="option">
-                        <input type="radio" id="diarizeOff" name="diarization" value="off" checked>
-                        <label for="diarizeOff" class="option-label">
-                            <div class="option-icon">📄</div>
-                            <div class="option-text">
-                                <div class="option-name">Off</div>
-                                <div class="option-description">Transcript only</div>
-                                <div class="option-speed" style="color: var(--color-text-tertiary);">Faster</div>
-                            </div>
-                        </label>
-                    </div>
-                    <div class="option">
-                        <input type="radio" id="diarizeOn" name="diarization" value="on">
-                        <label for="diarizeOn" class="option-label">
-                            <div class="option-icon">🗣️</div>
-                            <div class="option-text">
-                                <div class="option-name">On</div>
-                                <div class="option-description">Labels who is speaking</div>
-                                <div class="option-speed" style="color: var(--color-accent-teal);">Slower</div>
-                            </div>
-                        </label>
-                    </div>
-                </div>
-                <p class="selector-note">On uses {{ speaker_model }} ({{ speaker_checkpoint }}), speechbrain {{ speaker_version }}, running locally.</p>
-            </div>
-
-            <div class="file-info" id="fileInfo">
-                <strong>Selected file:</strong> <span id="fileName"></span><span id="sourceBadge" class="source-badge"></span>
-                <div class="button-group">
-                    <button class="btn" id="uploadBtn">✨ Transcribe</button>
-                    <button class="btn cancel-btn" id="cancelBtn" style="display: none;">❌ Cancel</button>
-                </div>
-            </div>
-
-            <div class="status" id="status"></div>
-
-            <div class="progress-container" id="progressContainer">
-                <div class="progress-header">
-                    <div class="timer">
-                        <span class="timer-icon">⏱️</span>
-                        <span id="timerDisplay">00:00</span>
-                    </div>
-                </div>
-                <div class="progress-bar-outer">
-                    <div class="progress-bar-inner" id="progressBar" style="width: 0%"></div>
-                    <span class="progress-percentage" id="progressPercentage">0%</span>
-                </div>
-                <div class="progress-detail" id="progressDetail"></div>
-                <div class="progress-stages">
-                    <div class="stage" id="stage1">
-                        <span>📤</span>
-                        <span>Uploading</span>
-                    </div>
-                    <div class="stage" id="stage2">
-                        <span>⚙️</span>
-                        <span>Loading model</span>
-                    </div>
-                    <div class="stage" id="stage3">
-                        <span>📝</span>
-                        <span>Transcribing</span>
-                    </div>
-                    <div class="stage" id="stage4">
-                        <span>👥</span>
-                        <span>Speakers</span>
-                    </div>
-                    <div class="stage" id="stage5">
-                        <span>✅</span>
-                        <span>Complete</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="transcript-container" id="transcriptContainer">
-                <div class="transcript-header">
-                    <h3>📝 Transcript</h3>
-                    <div class="copy-group">
-                        <button class="copy-btn tooltip" id="copyPlainBtn" data-tooltip="Plain text, exactly as shown">
-                            📋 Copy text
-                        </button>
-                        <button class="copy-btn tooltip" id="downloadTextBtn" data-tooltip="Save the transcript as a .txt file">
-                            💾 Download text
-                        </button>
-                    </div>
-                </div>
-                <div class="transcript" id="transcript"></div>
-            </div>
-
-            <!-- AI Analysis Section -->
-            <div class="ai-analysis-container" id="aiAnalysisContainer">
-                <div class="ai-analysis-header">
-                    <h3>🤖 AI Analysis</h3>
-                </div>
-
-                <!-- Model Selection -->
-                <div class="selector-card">
-                    <h4>
-                        <span>🧠</span>
-                        <span>AI Model Selection</span>
-                    </h4>
-                    <div class="options-grid">
-                        <div class="option">
-                            <input type="radio" id="aiModelGemma" name="aiModel" value="gemma" checked>
-                            <label for="aiModelGemma" class="option-label">
-                                <div class="option-icon">🏠</div>
-                                <div class="option-text">
-                                    <div class="option-name" id="aiModelGemmaName">Local {{ gemma_model }}</div>
-                                    <div class="option-description">via Ollama</div>
-                                    <div class="option-speed" style="color: var(--color-accent-teal);">🔒 Private</div>
+                        <div id="uploadPanel">
+                            <div class="upload-area" id="uploadArea">
+                                <div class="upload-idle">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M12 16V5M7.5 9.5 12 5l4.5 4.5M4.5 15.5v2.2a1.8 1.8 0 0 0 1.8 1.8h11.4a1.8 1.8 0 0 0 1.8-1.8v-2.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <div class="upload-text">Choose a file, or drop it here</div>
+                                    <div class="upload-subtext">MP3, MP4, WAV, M4A, FLAC, AVI, MOV, WebM or MKV</div>
                                 </div>
-                            </label>
-                        </div>
-                        <div class="option">
-                            <input type="radio" id="aiModelGemini" name="aiModel" value="gemini">
-                            <label for="aiModelGemini" class="option-label">
-                                <div class="option-icon">☁️</div>
-                                <div class="option-text">
-                                    <div class="option-name">Cloud Gemini</div>
-                                    <div class="option-description" id="aiModelGeminiDescription">via Google API</div>
-                                    <div class="option-speed" style="color: var(--color-accent-pink);">⚡ Faster</div>
+                                <div class="upload-selected">
+                                    <svg class="upload-selected-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                                        <path d="M8.2 12.3l2.5 2.5 5-5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <div class="upload-selected-body">
+                                        <div class="upload-selected-label" id="uploadSelectedLabel">File ready to transcribe</div>
+                                        <div class="upload-selected-name" id="uploadSelectedName"></div>
+                                    </div>
+                                    <div class="upload-selected-meta" id="uploadSelectedMeta"></div>
+                                    <button type="button" class="link-btn" id="uploadChangeBtn">Change</button>
                                 </div>
+                                <input type="file" id="fileInput" accept="audio/*,video/*,.mkv">
+                            </div>
+                        </div>
+
+                        <div class="recording-panel" id="recordingPanel" hidden>
+                            <div class="recording-permission-error" id="recordingPermissionError" hidden>
+                                <span id="recordingPermissionMsg">Microphone access denied.</span>
+                            </div>
+
+                            <div class="recording-controls" id="recordingControls">
+                                <div class="recording-visualizer-wrap">
+                                    <canvas id="audioVisualizer"></canvas>
+                                </div>
+                                <div class="recording-meta">
+                                    <span class="rec-indicator" id="recIndicator"></span>
+                                    <span class="rec-timer" id="recTimerDisplay">0:00</span>
+                                </div>
+                                <div class="recording-btn-row">
+                                    <button class="btn primary" id="startRecordBtn">Start recording</button>
+                                </div>
+                            </div>
+
+                            <div class="recording-review" id="recordingReview" hidden>
+                                <span class="recording-review-label">Recording preview</span>
+                                <audio id="recordingPlayback" controls></audio>
+                                <div class="recording-review-actions">
+                                        <button class="btn" id="saveRecordingBtn">Save recording</button>
+                                    <button class="btn" id="rerecordBtn">Re-record</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="field" id="deviceField">
+                            <span>Processing device</span>
+                            <div class="seg" role="group" aria-label="Processing device">
+                                <input type="radio" id="deviceGPU" name="device" value="cuda">
+                                <label for="deviceGPU" class="seg-btn">NVIDIA GPU</label>
+                                <input type="radio" id="deviceCPU" name="device" value="cpu" checked>
+                                <label for="deviceCPU" class="seg-btn">CPU</label>
+                            </div>
+                            <small>The GPU is many times faster. The CPU works everywhere.</small>
+                        </div>
+
+                        <label class="field">
+                            <span>Language</span>
+                            <select id="languageSelect">
+                                <option value="auto" selected>Auto detect</option>
+                                <option value="en">English</option>
+                                <option value="da">Danish</option>
+                                <option value="sv">Swedish</option>
+                                <option value="no">Norwegian</option>
+                                <option value="de">German</option>
+                                <option value="nl">Dutch</option>
+                                <option value="fr">French</option>
+                                <option value="es">Spanish</option>
+                                <option value="it">Italian</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="pl">Polish</option>
+                                <option value="fi">Finnish</option>
+                                <option value="uk">Ukrainian</option>
+                                <option value="ru">Russian</option>
+                                <option value="ar">Arabic</option>
+                                <option value="hi">Hindi</option>
+                                <option value="ja">Japanese</option>
+                                <option value="ko">Korean</option>
+                                <option value="zh">Chinese</option>
+                            </select>
+                            <small>Naming the language is more reliable than auto detection on short or noisy audio.</small>
+                        </label>
+
+                        <div class="field" id="diarizationSelectorCard">
+                            <span>Speaker identification</span>
+                            <div class="seg" role="group" aria-label="Speaker identification">
+                                <input type="radio" id="diarizeOff" name="diarization" value="off" checked>
+                                <label for="diarizeOff" class="seg-btn">Off</label>
+                                <input type="radio" id="diarizeOn" name="diarization" value="on">
+                                <label for="diarizeOn" class="seg-btn">On</label>
+                            </div>
+                            <small>On labels who is speaking and takes longer. Uses {{ speaker_model }} ({{ speaker_checkpoint }}), speechbrain {{ speaker_version }}, running locally.</small>
+                        </div>
+
+                        <div class="file-info" id="fileInfo">
+                            <span>Ready:</span>
+                            <span id="fileName"></span>
+                            <span id="sourceBadge" class="source-badge"></span>
+                        </div>
+
+                        <div class="panel-row">
+                            <button class="btn primary grow" id="uploadBtn">Transcribe</button>
+                            <button class="btn" id="cancelBtn" hidden>Cancel</button>
+                        </div>
+
+                        <div class="status" id="status"></div>
+
+                        <div class="progress-container" id="progressContainer">
+                            <div class="job-top">
+                                <span class="job-title" id="progressTitle">Transcription</span>
+                                <span class="job-status"><span id="progressPercentage">0%</span> · <span id="timerDisplay">00:00</span></span>
+                            </div>
+                            <div class="bar"><div id="progressBar" style="width: 0%"></div></div>
+                            <p class="progress-detail" id="progressDetail"></p>
+                            <div class="stages">
+                                <span class="stage" id="stage1">Uploading</span>
+                                <span class="stage" id="stage2">Loading model</span>
+                                <span class="stage" id="stage3">Transcribing</span>
+                                <span class="stage" id="stage4">Speakers</span>
+                                <span class="stage" id="stage5">Complete</span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- AI analysis -->
+                    <section class="panel-section" id="panelAnalyse" aria-labelledby="analyseHeading">
+                        <h3 class="section-head" id="analyseHeading">AI analysis</h3>
+                        <p class="ai-placeholder" id="aiPlaceholder">Transcribe something first. These options come alive once a transcript is ready.</p>
+                        <div class="ai-analysis-container" id="aiAnalysisContainer">
+                            <div class="field">
+                                <span>Model</span>
+                                <div class="seg" id="aiModelSeg" role="group" aria-label="Model">
+                                    <input type="radio" id="aiModelGemma" name="aiModel" value="gemma" checked>
+                                    <label for="aiModelGemma" class="seg-btn" id="aiModelGemmaName">Local {{ gemma_model }}</label>
+                                    <input type="radio" id="aiModelGemini" name="aiModel" value="gemini">
+                                    <label for="aiModelGemini" class="seg-btn">Cloud Gemini</label>
+                                </div>
+                                <small>The local model runs privately through Ollama. Cloud sends the transcript to Google's <span id="aiModelGeminiDescription">gemini-flash-latest</span>, which is faster and has a far larger context window.</small>
+                            </div>
+
+                            <p class="notice" id="aiModelNote" hidden></p>
+
+                            <div class="panel-row wrap">
+                                <button class="btn primary" id="summarizeBtn" disabled>Summarise</button>
+                                <button class="btn" id="insightsBtn" disabled>Extract insights</button>
+                                <button class="btn" id="aiCancelBtn" hidden>Cancel</button>
+                            </div>
+
+                            <label class="field">
+                                <span>Custom prompt</span>
+                                <textarea
+                                    id="customPrompt"
+                                    class="custom-prompt-input"
+                                    placeholder="Ask anything about the transcript…"
+                                    rows="3"
+                                    disabled
+                                ></textarea>
                             </label>
+                            <button class="btn block" id="customPromptBtn" disabled>Run custom prompt</button>
+
+                            <p class="context-note" id="contextNote" hidden></p>
+
+                            <div class="status" id="aiStatus"></div>
                         </div>
-                    </div>
-                    <p class="selector-note" id="aiModelNote" hidden></p>
-                </div>
 
-                <!-- Analysis Actions -->
-                <div class="ai-actions">
-                    <h4>Analysis Options</h4>
-                    <div class="button-group">
-                        <button class="btn ai-btn" id="summarizeBtn" disabled>
-                            📝 Summarize
-                        </button>
-                        <button class="btn ai-btn" id="insightsBtn" disabled>
-                            💡 Extract Insights
-                        </button>
-                        <button class="btn cancel-btn" id="aiCancelBtn" style="display: none;">❌ Cancel</button>
-                    </div>
+                    </section>
 
-                    <div class="custom-prompt-section">
-                        <label for="customPrompt">Custom Prompt:</label>
-                        <textarea
-                            id="customPrompt"
-                            class="custom-prompt-input"
-                            placeholder="Enter your custom analysis prompt here..."
-                            rows="3"
-                            disabled
-                        ></textarea>
-                        <button class="btn ai-btn" id="customPromptBtn" disabled>
-                            🎯 Run Custom Prompt
-                        </button>
-                    </div>
-
-                    <p class="context-note" id="contextNote" hidden></p>
-                </div>
-
-                <!-- AI Status -->
-                <div class="status" id="aiStatus"></div>
-
-                <!-- AI Results -->
-                <div class="ai-results" id="aiResults" style="display: none;">
-                    <div class="ai-results-header">
-                        <h4>📊 Analysis Results</h4>
-                        <div class="copy-group">
-                            <button class="copy-btn tooltip" id="copyAiPlainBtn" data-tooltip="Plain text, no markup">
-                                📋 Copy plain text
-                            </button>
-                            <button class="copy-btn tooltip" id="copyAiMarkdownBtn" data-tooltip="Markdown source">
-                                #️⃣ Copy markdown
-                            </button>
-                            <button class="copy-btn tooltip" id="copyAiRichBtn" data-tooltip="Formatted, keeps layout in Word and Apple Notes">
-                                ✨ Copy formatted
-                            </button>
-                        </div>
-                    </div>
-                    <div class="ai-results-content" id="aiResultsContent"></div>
                 </div>
             </div>
 
-            <div class="settings-container">
-                <details id="settingsDetails">
-                    <summary>⚙️ Settings</summary>
-                    <p class="selector-note">Changes apply at once, with no restart, and are kept across restarts and rebuilds of the container.</p>
-                    <div id="settingsFields"></div>
-                    <div class="settings-actions">
-                        <button class="btn" id="settingsSaveBtn">💾 Save settings</button>
-                        <button class="btn cancel-btn" id="settingsResetBtn">↩️ Reset to defaults</button>
-                    </div>
-                    <div class="status" id="settingsStatus"></div>
-                </details>
-            </div>
+        </section>
+    </main>
+
+    <!-- Settings drawer -->
+    <div class="drawer-scrim" id="drawerScrim" hidden></div>
+    <aside class="drawer" id="drawer" hidden aria-label="Settings">
+        <div class="drawer-head">
+            <h3>Settings</h3>
+            <button class="icon-btn" id="closeDrawer" aria-label="Close settings">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+            </button>
         </div>
-    </div>
 
-    <script>
+        <p class="drawer-note">Changes apply at once, with no restart, and are kept across restarts and rebuilds of the container.</p>
+
+        <div class="settings-fields" id="settingsFields"></div>
+
+        <div class="settings-actions">
+            <button class="btn primary" id="settingsSaveBtn">Save settings</button>
+            <button class="btn" id="settingsResetBtn">Reset to defaults</button>
+        </div>
+
+        <div class="status" id="settingsStatus"></div>
+    </aside>
+
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+
+    <script nonce="{{ csp_nonce() }}">
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const fileInfo = document.getElementById('fileInfo');
@@ -1756,6 +1431,62 @@
         const progressDetail = document.getElementById('progressDetail');
         const timerDisplay = document.getElementById('timerDisplay');
         const cancelBtn = document.getElementById('cancelBtn');
+        const progressTitle = document.getElementById('progressTitle');
+
+        // ============================================================
+        // SETTINGS DRAWER AND TOASTS
+        // ============================================================
+
+        // The Transcribe section of the side panel. It carries a class while
+        // the microphone is the chosen source.
+        const panelTranscribe = document.getElementById('panelTranscribe');
+
+        const drawer = document.getElementById('drawer');
+        const drawerScrim = document.getElementById('drawerScrim');
+
+        function openDrawer(open) {
+            drawer.hidden = !open;
+            drawerScrim.hidden = !open;
+        }
+
+        document.getElementById('settingsBtn').addEventListener('click', () => openDrawer(true));
+        document.getElementById('closeDrawer').addEventListener('click', () => openDrawer(false));
+        drawerScrim.addEventListener('click', () => openDrawer(false));
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') openDrawer(false);
+        });
+
+        // Status lines are text, never markup. What reaches them came from the
+        // server, a setting or a model's answer, and none of those may put HTML
+        // into the page. The spinner is the one element allowed.
+        function setStatus(element, kind, text, spinning) {
+            element.className = 'status ' + (kind ? kind + ' ' : '') + 'show';
+            element.replaceChildren();
+            if (spinning) {
+                const spinner = document.createElement('div');
+                spinner.className = 'spinner';
+                element.appendChild(spinner);
+            }
+            element.append(text);
+        }
+
+        // A short message that goes away by itself. Errors linger longer.
+        function toast(message, kind) {
+            const element = document.createElement('div');
+            element.className = 'toast' + (kind ? ' is-' + kind : '');
+            element.textContent = message;
+            document.getElementById('toasts').appendChild(element);
+            setTimeout(() => {
+                element.style.opacity = '0';
+                element.style.transition = 'opacity .3s';
+                setTimeout(() => element.remove(), 300);
+            }, (kind === 'error' || kind === 'warn') ? 6000 : 3000);
+        }
+
+        // The brand tile glows while a transcription or an analysis is running.
+        function setWorking(working) {
+            document.body.classList.toggle('is-thinking', working);
+        }
 
         let selectedFile = null;
         let downloadUrl = null;
@@ -1798,7 +1529,6 @@
         const recIndicator          = document.getElementById('recIndicator');
         const audioVisualizer       = document.getElementById('audioVisualizer');
         const recordingPlayback     = document.getElementById('recordingPlayback');
-        const useRecordingBtn       = document.getElementById('useRecordingBtn');
         const saveRecordingBtn      = document.getElementById('saveRecordingBtn');
         const rerecordBtn           = document.getElementById('rerecordBtn');
         const sourceBadge           = document.getElementById('sourceBadge');
@@ -1811,11 +1541,13 @@
             if (mode === activeInputMode) return;
             activeInputMode = mode;
 
+            panelTranscribe.classList.toggle('mode-record', mode === 'record');
+
             if (mode === 'upload') {
-                tabUpload.classList.add('active');
-                tabRecord.classList.remove('active');
-                uploadPanel.style.display  = 'block';
-                recordingPanel.style.display = 'none';
+                tabUpload.classList.add('is-active');
+                tabRecord.classList.remove('is-active');
+                uploadPanel.hidden = false;
+                recordingPanel.hidden = true;
                 // Clear any recording-derived selected file
                 if (selectedFile && selectedFile.name && selectedFile.name.startsWith('recording_')) {
                     selectedFile = null;
@@ -1825,10 +1557,10 @@
                 // Stop any in-progress recording
                 if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
             } else {
-                tabRecord.classList.add('active');
-                tabUpload.classList.remove('active');
-                recordingPanel.style.display = 'block';
-                uploadPanel.style.display  = 'none';
+                tabRecord.classList.add('is-active');
+                tabUpload.classList.remove('is-active');
+                recordingPanel.hidden = false;
+                uploadPanel.hidden = true;
                 // Clear file-upload-derived selected file
                 if (selectedFile && !(selectedFile.name && selectedFile.name.startsWith('recording_'))) {
                     selectedFile = null;
@@ -1855,7 +1587,7 @@
             recTimerInterval = null;
         }
 
-        // --- Visualizer ---
+        // --- Visualiser ---
         function startVisualizer(stream) {
             try {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1879,17 +1611,17 @@
                     analyserNode.getByteFrequencyData(data);
                     ctx.clearRect(0, 0, W, H);
                     // Background
-                    ctx.fillStyle = '#1A1A2E';
+                    ctx.fillStyle = '#232739';
                     ctx.fillRect(0, 0, W, H);
-                    // Bars with purple→pink gradient
+                    // Bars sweep from the apricot accent into pink.
                     const barW = (W / bufLen) * 2.2;
                     let x = 0;
                     for (let i = 0; i < bufLen; i++) {
                         const barH = (data[i] / 255) * H * 0.9;
                         const t = i / bufLen;
-                        const r = Math.round(139 + (236 - 139) * t);
-                        const g = Math.round(92  + (72  - 92)  * t);
-                        const b = Math.round(246 + (153 - 246) * t);
+                        const r = 255;
+                        const g = Math.round(158 + (111 - 158) * t);
+                        const b = Math.round(100 + (165 - 100) * t);
                         ctx.fillStyle = `rgb(${r},${g},${b})`;
                         ctx.fillRect(x, H - barH, Math.max(barW - 1, 1), barH);
                         x += barW;
@@ -1897,7 +1629,7 @@
                 }
                 draw();
             } catch (e) {
-                console.warn('Visualizer unavailable:', e);
+                console.warn('Visualiser unavailable:', e);
             }
         }
 
@@ -1939,7 +1671,7 @@
         async function startRecording() {
             recordedChunks = [];
             recordedBlob   = null;
-            recPermissionError.style.display = 'none';
+            recPermissionError.hidden = true;
 
             let stream;
             try {
@@ -1956,7 +1688,7 @@
                     msg = `Could not access microphone: ${err.message}`;
                 }
                 recPermissionMsg.textContent = msg;
-                recPermissionError.style.display = 'flex';
+                recPermissionError.hidden = false;
                 return;
             }
 
@@ -1977,11 +1709,14 @@
                 const raw = new Blob(recordedChunks, { type: actualMime });
                 recordedBlob = await fixWebMDuration(raw, recDurationMs);
                 showRecordingReview(recordedBlob);
+                // The recording is the file to transcribe from here on;
+                // there is nothing to confirm.
+                useRecording();
             };
 
             mediaRecorder.start(100);
 
-            startRecordBtn.textContent = '⏹️ Stop Recording';
+            startRecordBtn.textContent = 'Stop recording';
             startRecordBtn.classList.add('rec-btn-stop');
             recIndicator.classList.add('recording');
             startRecTimer();
@@ -1995,7 +1730,7 @@
             if (activeStream) { activeStream.getTracks().forEach(t => t.stop()); activeStream = null; }
             stopRecTimer();
             stopVisualizer();
-            startRecordBtn.textContent = '🎙️ Start Recording';
+            startRecordBtn.textContent = 'Start recording';
             startRecordBtn.classList.remove('rec-btn-stop');
             recIndicator.classList.remove('recording');
         }
@@ -2024,8 +1759,8 @@
                 URL.revokeObjectURL(recordingPlayback.src);
             }
             recordingPlayback.src = URL.createObjectURL(blob);
-            recordingControls.style.display = 'none';
-            recordingReview.style.display   = 'block';
+            recordingControls.hidden = true;
+            recordingReview.hidden = false;
         }
 
         function resetRecordingUI() {
@@ -2037,9 +1772,9 @@
             recordedBlob   = null;
             recTimerDisplay.textContent = '0:00';
             recIndicator.classList.remove('recording');
-            recordingReview.style.display   = 'none';
-            recordingControls.style.display = 'block';
-            startRecordBtn.textContent = '🎙️ Start Recording';
+            recordingReview.hidden = true;
+            recordingControls.hidden = false;
+            startRecordBtn.textContent = 'Start recording';
             startRecordBtn.classList.remove('rec-btn-stop');
             const ctx = audioVisualizer.getContext('2d');
             ctx.clearRect(0, 0, audioVisualizer.width, audioVisualizer.height);
@@ -2054,23 +1789,28 @@
             }
         });
 
-        useRecordingBtn.addEventListener('click', () => {
-            if (!recordedBlob) return;
+        // Take the finished recording as the file to transcribe. Runs when a
+        // recording stops, and again from the Transcribe button if switching
+        // sources cleared the selection in between.
+        function useRecording() {
+            if (!recordedBlob) return false;
             const name = recFilename(recordedBlob.type);
             const recFile = new File([recordedBlob], name, { type: recordedBlob.type });
             selectedFile = recFile;
             fileName.textContent = name;
-            sourceBadge.textContent = '🎙️ Recording';
+            sourceBadge.textContent = 'Recording';
             sourceBadge.className = 'source-badge badge-mic';
             fileInfo.classList.add('show');
             markFileSelected(recFile, 'Recording ready to transcribe');
             status.classList.remove('show');
             transcriptContainer.classList.remove('show');
+            document.getElementById('aiResults').hidden = true;
             resetProgress();
             stopTimer();
             timerDisplay.textContent = '00:00';
             fileInfo.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        });
+            return true;
+        }
 
         saveRecordingBtn.addEventListener('click', () => {
             if (!recordedBlob) return;
@@ -2111,13 +1851,9 @@
                 }
 
                 const data = await response.json();
-                const deviceSelectorCard = document.querySelector('.selector-card');
-
                 if (!data.cuda_available) {
-                    // Hide the entire device selector when GPU is not available
-                    if (deviceSelectorCard) {
-                        deviceSelectorCard.style.display = 'none';
-                    }
+                    // No GPU to choose, so the choice is not offered.
+                    document.getElementById('deviceField').hidden = true;
                     // Ensure CPU is selected by default
                     const deviceCPUInput = document.getElementById('deviceCPU');
                     if (deviceCPUInput) {
@@ -2143,8 +1879,64 @@
             }
         }
 
-        // Disable an analysis backend that cannot run, and say why, rather than
-        // letting the user pick it and hit an error later.
+        // Why a backend cannot run, by radio value, as a sentence with a link in
+        // it: {before, link, after, action}. Kept rather than shown: the note
+        // appears only when someone clicks the greyed-out option, so the panel
+        // is not cluttered with a warning about a service they may never use.
+        let aiUnavailableReasons = {};
+
+        // Ask the server again whether the analysis backends can run, and
+        // nothing else: the language choice and the rest of the page stay.
+        async function refreshAiAvailability() {
+            const response = await fetch('/health');
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            applyAiAvailability(data.ai_services || {});
+        }
+
+        // Ollama can be started while the page is open. The link asks the
+        // server to look again and picks the local model once it is there.
+        async function retryLocalModel(input, link) {
+            link.disabled = true;
+            link.textContent = 'checking\u2026';
+            try {
+                await refreshAiAvailability();
+            } catch (error) {
+                toast(`Could not check: ${error.message}`, 'error');
+            }
+            if (!input.disabled) {
+                input.checked = true;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                document.getElementById('aiModelNote').hidden = true;
+                if (transcriptText) enableAiAnalysis();
+                toast(`Local ${localModelName} is ready.`, 'success');
+            } else {
+                showBackendReason(input);
+                toast(`Local ${localModelName} is still unavailable.`, 'warn');
+            }
+        }
+
+        function showBackendReason(input) {
+            const note = document.getElementById('aiModelNote');
+            const reason = aiUnavailableReasons[input.value];
+            if (!reason) {
+                note.hidden = true;
+                return;
+            }
+            note.textContent = reason.before;
+            const link = document.createElement('button');
+            link.type = 'button';
+            link.className = 'link-btn';
+            link.textContent = reason.link;
+            link.addEventListener('click', () => reason.action(input, link));
+            note.appendChild(link);
+            note.append(reason.after
+                + (aiBackendAvailable ? '' : ' Transcript analysis is switched off until a model is available.'));
+            note.hidden = false;
+        }
+
+        // Disable an analysis backend that cannot run, rather than letting the
+        // user pick it and hit an error later.
         function applyAiAvailability(ai) {
             const localInput = document.getElementById('aiModelGemma');
             const cloudInput = document.getElementById('aiModelGemini');
@@ -2154,27 +1946,39 @@
             document.getElementById('aiModelGemmaName').textContent = `Local ${model}`;
             if (ai.gemini_model) {
                 cloudModelName = ai.gemini_model;
-                document.getElementById('aiModelGeminiDescription').textContent = `${cloudModelName} via Google API`;
+                document.getElementById('aiModelGeminiDescription').textContent = cloudModelName;
             }
-            const reasons = [];
+            aiUnavailableReasons = {};
 
             const localReady = !!ai.ollama_available && !!ai.ollama_model_available;
             localInput.disabled = !localReady;
             if (!localReady) {
-                if (!ai.ollama_available) {
-                    reasons.push(`Local ${model} is unavailable: Ollama is not reachable at `
-                        + `${ai.ollama_url || 'its configured address'}. Start Ollama, then reload this page.`);
-                } else {
-                    reasons.push(`Local ${model} is unavailable: Ollama is running but does not have `
-                        + `that model. Run "ollama pull ${model}", then reload this page.`);
-                }
+                aiUnavailableReasons.gemma = {
+                    before: !ai.ollama_available
+                        ? `Local ${model} is unavailable: Ollama is not reachable at `
+                            + `${ai.ollama_url || 'its configured address'}. Start Ollama, then `
+                        : `Local ${model} is unavailable: Ollama is running but does not have `
+                            + `that model. Run "ollama pull ${model}", then `,
+                    link: 'click here',
+                    after: '.',
+                    action: retryLocalModel
+                };
             }
 
             const cloudReady = !!ai.gemini_available;
             cloudInput.disabled = !cloudReady;
             if (!cloudReady) {
-                reasons.push('Cloud Gemini is unavailable: add an API key under Settings.');
+                aiUnavailableReasons.gemini = {
+                    before: 'Cloud Gemini is unavailable: add an API key under ',
+                    link: 'Settings',
+                    after: '.',
+                    action: () => openDrawer(true)
+                };
             }
+
+            // The local model is the default whenever it can run, unless a
+            // choice was made on this page.
+            if (localReady && !aiModelChosenByUser) localInput.checked = true;
 
             // Keep the selection on something that can actually run.
             if (localInput.checked && !localReady && cloudReady) cloudInput.checked = true;
@@ -2188,21 +1992,29 @@
             if (!aiBackendAvailable) {
                 localInput.checked = false;
                 cloudInput.checked = false;
-                reasons.push('Transcript analysis is switched off until one of them is configured.');
             }
 
-            if (reasons.length) {
-                note.textContent = reasons.join(' ');
-                note.hidden = false;
-            } else {
-                note.hidden = true;
-            }
+            // Whatever was being explained may no longer apply.
+            note.hidden = true;
 
             if (!aiBackendAvailable) disableAiAnalysis();
 
             contextInfo = ai;
             updateContextNote();
         }
+
+        // A greyed-out option says why when it is clicked. Its radio is
+        // disabled, so the label's click is the only thing that fires.
+        document.getElementById('aiModelSeg').addEventListener('click', event => {
+            const label = event.target.closest('label');
+            if (!label) return;
+            const input = document.getElementById(label.htmlFor);
+            if (!input || !input.disabled) {
+                document.getElementById('aiModelNote').hidden = true;
+                return;
+            }
+            showBackendReason(input);
+        });
 
         // Mirrors plan_context_window() in app.py so the page can warn before
         // submitting rather than after the server has refused. The server
@@ -2229,8 +2041,8 @@
                     .filter(value => typeof value === 'number' && value > 0);
                 const ceiling = bounds.length
                     ? Math.min(...bounds)
-                    : (ladder[ladder.length - 1] || 32768);
-                const floor = Math.min(contextInfo.context_floor || 32768, ceiling);
+                    : (ladder[ladder.length - 1] || 8192);
+                const floor = Math.min(contextInfo.context_floor || 8192, ceiling);
 
                 const required = estimated + reserved;
                 let target = ceiling;
@@ -2270,7 +2082,7 @@
             const n = value => value.toLocaleString();
             if (plan.dropped > 0) {
                 note.className = 'context-note';
-                note.textContent = `\u26A0\uFE0F This transcript is roughly ${n(plan.estimated)} tokens, `
+                note.textContent = `This transcript is roughly ${n(plan.estimated)} tokens, `
                     + `more than the ${n(plan.window)} token window available locally. About `
                     + `${n(plan.dropped)} characters would be dropped from the start. You will be `
                     + `asked to confirm before it runs. Cloud Gemini has a much larger window.`;
@@ -2282,10 +2094,17 @@
             note.hidden = false;
         }
 
+        // A model picked on this page is kept through later availability
+        // checks; otherwise the local model is the default whenever it can run.
+        let aiModelChosenByUser = false;
+
         // The window only constrains the local model, so the note follows the
         // selection as well as the transcript.
         for (const radio of document.getElementsByName('aiModel')) {
-            radio.addEventListener('change', updateContextNote);
+            radio.addEventListener('change', () => {
+                aiModelChosenByUser = true;
+                updateContextNote();
+            });
         }
 
         window.addEventListener('DOMContentLoaded', loadSystemInfo);
@@ -2365,10 +2184,9 @@
 
             stopTimer();
             resetProgress();
-            status.className = 'status error show';
-            status.innerHTML = '🛑 Transcription cancelled by user';
+            setStatus(status, 'error', 'Transcription cancelled.');
             uploadBtn.disabled = false;
-            cancelBtn.style.display = 'none';
+            cancelBtn.hidden = true;
             currentTaskId = null;
         });
 
@@ -2428,6 +2246,7 @@
         function startProgress(skipSpeakers) {
             speakersSkipped = Boolean(skipSpeakers);
             progressContainer.classList.add('show');
+            progressTitle.textContent = selectedFile ? selectedFile.name : 'Transcription';
             renderProgress(0, 'Uploading');
 
             stages.forEach(stage => {
@@ -2613,12 +2432,13 @@
             if (e.target.files.length > 0) {
                 selectedFile = e.target.files[0];
                 fileName.textContent = selectedFile.name;
-                sourceBadge.textContent = '📁 File';
+                sourceBadge.textContent = 'File';
                 sourceBadge.className = 'source-badge badge-file';
                 fileInfo.classList.add('show');
                 markFileSelected(selectedFile, 'File ready to transcribe');
                 status.classList.remove('show');
                 transcriptContainer.classList.remove('show');
+                document.getElementById('aiResults').hidden = true;
                 resetProgress();
                 stopTimer();
                 timerDisplay.textContent = '00:00';
@@ -2641,26 +2461,21 @@
             if (e.dataTransfer.files.length > 0) {
                 selectedFile = e.dataTransfer.files[0];
                 fileName.textContent = selectedFile.name;
-                sourceBadge.textContent = '📁 File';
+                sourceBadge.textContent = 'File';
                 sourceBadge.className = 'source-badge badge-file';
                 fileInfo.classList.add('show');
                 markFileSelected(selectedFile, 'File ready to transcribe');
                 status.classList.remove('show');
                 transcriptContainer.classList.remove('show');
+                document.getElementById('aiResults').hidden = true;
                 resetProgress();
                 stopTimer();
                 timerDisplay.textContent = '00:00';
             }
         });
 
-        function flashCopied(button) {
-            const original = button.innerHTML;
-            button.classList.add('copied');
-            button.innerHTML = '✓ Copied!';
-            setTimeout(() => {
-                button.classList.remove('copied');
-                button.innerHTML = original;
-            }, 2000);
+        function notifyCopied() {
+            toast('Copied to clipboard.', 'success');
         }
 
         function copyViaSelection(html) {
@@ -2691,10 +2506,10 @@
             return ok;
         }
 
-        async function copyPlainText(text, button) {
+        async function copyPlainText(text) {
             try {
                 await navigator.clipboard.writeText(text);
-                flashCopied(button);
+                notifyCopied();
             } catch (err) {
                 const area = document.createElement('textarea');
                 area.value = text;
@@ -2705,20 +2520,20 @@
                 const ok = document.execCommand('copy');
                 document.body.removeChild(area);
                 if (ok) {
-                    flashCopied(button);
+                    notifyCopied();
                 } else {
-                    alert('Could not copy. Please select the transcript and copy manually.');
+                    toast('Could not copy. Select the text and copy it by hand.', 'error');
                 }
             }
         }
 
         document.getElementById('copyPlainBtn').addEventListener('click', () => {
-            copyPlainText(transcriptText, document.getElementById('copyPlainBtn'));
+            copyPlainText(transcriptText);
         });
 
         // Word and Apple Notes read the clipboard's text/html flavour; the plain
         // flavour is what everything else receives.
-        async function copyRichHtml(html, plain, button) {
+        async function copyRichHtml(html, plain) {
             if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
                 try {
                     await navigator.clipboard.write([
@@ -2727,7 +2542,7 @@
                             'text/plain': new Blob([plain], { type: 'text/plain' })
                         })
                     ]);
-                    flashCopied(button);
+                    notifyCopied();
                     return;
                 } catch (err) {
                     console.warn('Rich clipboard write failed, falling back', err);
@@ -2735,9 +2550,9 @@
             }
 
             if (copyViaSelection(html)) {
-                flashCopied(button);
+                notifyCopied();
             } else {
-                alert('Could not copy formatted text. Try the Text button instead.');
+                toast('Could not copy formatted text. Try Copy plain text instead.', 'error');
             }
         }
 
@@ -2745,12 +2560,28 @@
             if (downloadUrl) {
                 window.location.href = downloadUrl;
             } else {
-                alert('No transcript file is available yet.');
+                toast('No transcript file is available yet.', 'error');
             }
         });
 
         uploadBtn.addEventListener('click', async () => {
-            if (!selectedFile) return;
+            if (!selectedFile) {
+                // A finished recording whose selection was cleared is what they meant.
+                if (activeInputMode === 'record' && recordedBlob) {
+                    useRecording();
+                } else {
+                    let why = 'Choose a file to transcribe first.';
+                    if (activeInputMode === 'record') {
+                        why = mediaRecorder && mediaRecorder.state === 'recording'
+                            ? 'Stop the recording first.'
+                            : 'Record something first.';
+                    }
+                    status.className = 'status error show';
+                    status.textContent = why;
+                    toast(why, 'error');
+                    return;
+                }
+            }
 
             const deviceRadios = document.getElementsByName('device');
             let selectedDevice = 'cpu';
@@ -2778,11 +2609,12 @@
 
             const deviceName = selectedDevice === 'cuda' ? 'GPU' : 'CPU';
             const modelName = 'Whisper (large-v3-turbo)';
-            status.className = 'status processing show';
-            status.innerHTML = `<div class="spinner"></div>Processing on ${deviceName} with ${modelName}... This may take a few minutes.`;
+            setStatus(status, 'processing',
+                `Transcribing on the ${deviceName} with ${modelName}. This can take a few minutes.`, true);
             uploadBtn.disabled = true;
-            cancelBtn.style.display = 'inline-block';
+            cancelBtn.hidden = false;
             transcriptContainer.classList.remove('show');
+            setWorking(true);
 
             abortController = new AbortController();
             startTimer();
@@ -2820,18 +2652,23 @@
                         speakerSummary = 'speaker identification off';
                     }
 
-                    let statusHtml = `✅ Transcription complete in ${finalTime} using ${deviceUsed} `
+                    const summary = `Transcription complete in ${finalTime} using ${deviceUsed} `
                         + `with ${modelUsed}, ${speakerSummary}.`;
 
                     // Never let a failure pass as a normal result.
                     if (result.diarization_degraded) {
                         const reasons = (result.diarization_warnings || []).join('. ');
-                        statusHtml += `<span class="status-warning">⚠️ ${reasons || 'Speaker identification did not complete'}.</span>`;
-                        status.className = 'status warning show';
+                        setStatus(status, 'warning', summary);
+                        const warning = document.createElement('span');
+                        warning.className = 'status-warning';
+                        warning.textContent = `${reasons || 'Speaker identification did not complete'}.`;
+                        status.appendChild(warning);
                     } else {
-                        status.className = 'status success show';
+                        setStatus(status, 'success', summary);
                     }
-                    status.innerHTML = statusHtml;
+                    toast(result.diarization_degraded
+                        ? 'Transcript ready, with a note about the speakers.'
+                        : 'Transcript ready.', result.diarization_degraded ? 'warn' : 'success');
 
                     transcriptText = result.transcript;
                     transcript.textContent = transcriptText;
@@ -2853,11 +2690,12 @@
                 if (error.name === 'AbortError') return;
                 stopTimer();
                 resetProgress();
-                status.className = 'status error show';
-                status.innerHTML = '❌ Error: ' + error.message;
+                setStatus(status, 'error', 'Error: ' + error.message);
+                toast(error.message, 'error');
             } finally {
                 uploadBtn.disabled = false;
-                cancelBtn.style.display = 'none';
+                cancelBtn.hidden = true;
+                setWorking(false);
                 abortController = null;
                 currentTaskId = null;
             }
@@ -3193,16 +3031,16 @@
                     shown = data.text;
                     currentAiResult = shown;
                     aiResultsContent.innerHTML = renderMarkdown(shown);
-                    aiResults.style.display = 'block';
+                    aiResults.hidden = false;
                 }
 
                 if (data.status === 'running' && !analysisCancelRequested) {
                     if (shown) {
                         const words = shown.split(/\s+/).filter(Boolean).length;
-                        aiStatus.innerHTML = `<div class="spinner"></div>Writing, ${words} words so far...`;
+                        setStatus(aiStatus, 'processing', `Writing, ${words} words so far...`, true);
                     } else {
-                        aiStatus.innerHTML = '<div class="spinner"></div>Loading the model and reading '
-                            + `the transcript, ${Math.round(data.elapsed_seconds)}s...`;
+                        setStatus(aiStatus, 'processing', 'Loading the model and reading '
+                            + `the transcript, ${Math.round(data.elapsed_seconds)}s...`, true);
                     }
                 }
 
@@ -3215,8 +3053,7 @@
         // Perform AI analysis
         async function performAiAnalysis(analysisType, customPrompt = null) {
             if (!transcriptText) {
-                aiStatus.className = 'status error show';
-                aiStatus.innerHTML = '❌ No transcript available for analysis';
+                setStatus(aiStatus, 'error', 'No transcript to analyse yet.');
                 return;
             }
 
@@ -3224,10 +3061,10 @@
 
             disableAiAnalysis();
             disableTranscription();
-            aiStatus.className = 'status processing show';
-            aiStatus.innerHTML = '<div class="spinner"></div>Analyzing transcript...';
-            aiResults.style.display = 'none';
+            setStatus(aiStatus, 'processing', 'Analysing the transcript...', true);
+            aiResults.hidden = true;
             analysisCancelRequested = false;
+            setWorking(true);
 
             try {
                 const requestData = {
@@ -3256,14 +3093,12 @@
                 // the tail of a meeting without knowing that is what it is.
                 if (response.status === 409 && result.code === 'transcript_exceeds_context') {
                     if (!window.confirm(result.error)) {
-                        aiStatus.className = 'status show';
-                        aiStatus.textContent = 'Analysis cancelled. The transcript is longer '
-                            + 'than the local context window.';
+                        setStatus(aiStatus, '', 'Analysis cancelled. The transcript is longer '
+                            + 'than the local context window.');
                         return;
                     }
                     requestData.confirm_truncation = true;
-                    aiStatus.className = 'status processing show';
-                    aiStatus.innerHTML = '<div class="spinner"></div>Analyzing the part that fits...';
+                    setStatus(aiStatus, 'processing', 'Analysing the part that fits...', true);
                     response = await send();
                     result = await response.json();
                 }
@@ -3278,36 +3113,38 @@
                 // connection no longer loses a long analysis.
                 currentAnalysisId = result.task_id;
                 aiCancelBtn.disabled = false;
-                aiCancelBtn.style.display = 'inline-block';
+                aiCancelBtn.hidden = false;
 
                 const outcome = await awaitAnalysis(currentAnalysisId);
 
                 currentAiResult = outcome.analysis;
                 aiResultsContent.innerHTML = renderMarkdown(currentAiResult);
-                aiResults.style.display = 'block';
+                aiResults.hidden = false;
 
                 const modelName = aiModel === 'gemma' ? `Local ${localModelName}` : `Cloud Gemini (${cloudModelName})`;
                 const ctx = outcome.context;
-                let statusText = `✅ Analysis complete using ${modelName}`;
+                let statusText = `Analysis complete using ${modelName}`;
                 if (ctx && ctx.chars_dropped > 0) {
-                    statusText = `⚠️ Analysis complete using ${modelName}, but about `
+                    statusText = `Analysis complete using ${modelName}, but about `
                         + `${ctx.chars_dropped.toLocaleString()} characters did not fit the `
                         + `${ctx.window.toLocaleString()} token window and were dropped from `
                         + 'the start of the transcript.';
                 } else if (ctx) {
                     statusText += ` with a ${ctx.window.toLocaleString()} token context window`;
                 }
-                aiStatus.className = ctx && ctx.chars_dropped > 0
-                    ? 'status show' : 'status success show';
-                aiStatus.innerHTML = statusText;
+                setStatus(aiStatus, ctx && ctx.chars_dropped > 0 ? '' : 'success', statusText);
+                toast(ctx && ctx.chars_dropped > 0
+                    ? 'Analysis ready, with part of the transcript dropped.'
+                    : 'Analysis ready.', ctx && ctx.chars_dropped > 0 ? 'warn' : 'success');
             } catch (error) {
-                aiStatus.className = 'status error show';
-                aiStatus.innerHTML = error.name === 'AbortError'
-                    ? '🛑 Analysis cancelled'
-                    : '❌ Error: ' + error.message;
+                setStatus(aiStatus, 'error', error.name === 'AbortError'
+                    ? 'Analysis cancelled.'
+                    : 'Error: ' + error.message);
+                if (error.name !== 'AbortError') toast(error.message, 'error');
             } finally {
                 currentAnalysisId = null;
-                aiCancelBtn.style.display = 'none';
+                aiCancelBtn.hidden = true;
+                setWorking(false);
                 enableAiAnalysis();
                 enableTranscription();
             }
@@ -3317,8 +3154,7 @@
             if (!currentAnalysisId) return;
             analysisCancelRequested = true;
             aiCancelBtn.disabled = true;
-            aiStatus.className = 'status processing show';
-            aiStatus.innerHTML = '<div class="spinner"></div>Cancelling...';
+            setStatus(aiStatus, 'processing', 'Cancelling...', true);
             try {
                 await fetch(`/ai-analysis/${currentAnalysisId}/cancel`, { method: 'POST' });
             } catch (error) {
@@ -3338,8 +3174,7 @@
         customPromptBtn.addEventListener('click', () => {
             const prompt = customPromptInput.value.trim();
             if (!prompt) {
-                aiStatus.className = 'status error show';
-                aiStatus.innerHTML = '❌ Please enter a custom prompt';
+                setStatus(aiStatus, 'error', 'Enter a custom prompt first.');
                 return;
             }
             performAiAnalysis('custom', prompt);
@@ -3415,19 +3250,15 @@
         }
 
         document.getElementById('copyAiPlainBtn').addEventListener('click', () => {
-            copyPlainText(analysisAsPlainText(currentAiResult), document.getElementById('copyAiPlainBtn'));
+            copyPlainText(analysisAsPlainText(currentAiResult));
         });
 
         document.getElementById('copyAiMarkdownBtn').addEventListener('click', () => {
-            copyPlainText(currentAiResult, document.getElementById('copyAiMarkdownBtn'));
+            copyPlainText(currentAiResult);
         });
 
         document.getElementById('copyAiRichBtn').addEventListener('click', () => {
-            copyRichHtml(
-                analysisAsRichHtml(currentAiResult),
-                analysisAsPlainText(currentAiResult),
-                document.getElementById('copyAiRichBtn')
-            );
+            copyRichHtml(analysisAsRichHtml(currentAiResult), analysisAsPlainText(currentAiResult));
         });
 
         // Start GPU status polling when page loads
@@ -3441,7 +3272,7 @@
         const settingsResetBtn = document.getElementById('settingsResetBtn');
 
         function renderSettings(payload) {
-            settingsFields.innerHTML = '';
+            settingsFields.replaceChildren();
             const groups = new Map();
             payload.fields.forEach(field => {
                 if (!groups.has(field.group)) groups.set(field.group, []);
@@ -3449,15 +3280,15 @@
             });
 
             groups.forEach((fields, group) => {
-                const card = document.createElement('div');
-                card.className = 'selector-card';
-                const title = document.createElement('h4');
+                const section = document.createElement('div');
+                section.className = 'settings-group';
+                const title = document.createElement('h3');
                 title.textContent = group;
-                card.appendChild(title);
+                section.appendChild(title);
 
                 fields.forEach(field => {
                     const wrap = document.createElement('div');
-                    wrap.className = 'settings-field';
+                    wrap.className = 'field';
 
                     const label = document.createElement('label');
                     label.htmlFor = `setting-${field.key}`;
@@ -3488,12 +3319,11 @@
                     input.dataset.key = field.key;
                     input.dataset.type = field.type;
 
-                    const help = document.createElement('p');
-                    help.className = 'selector-note';
+                    const help = document.createElement('small');
                     help.textContent = field.help;
 
-                    const error = document.createElement('p');
-                    error.className = 'selector-note settings-error';
+                    const error = document.createElement('small');
+                    error.className = 'settings-error';
                     error.id = `setting-${field.key}-error`;
                     error.hidden = true;
 
@@ -3502,7 +3332,7 @@
                     if (field.type === 'secret' && field.is_set) {
                         const remove = document.createElement('button');
                         remove.type = 'button';
-                        remove.className = 'copy-btn';
+                        remove.className = 'link-btn';
                         remove.textContent = 'Remove key';
                         remove.addEventListener('click', () => {
                             input.value = '';
@@ -3512,9 +3342,9 @@
                         wrap.appendChild(remove);
                     }
 
-                    card.appendChild(wrap);
+                    section.appendChild(wrap);
                 });
-                settingsFields.appendChild(card);
+                settingsFields.appendChild(section);
             });
         }
 
@@ -3553,7 +3383,7 @@
                 renderSettings(await response.json());
             } catch (error) {
                 settingsStatus.className = 'status error show';
-                settingsStatus.textContent = '❌ Could not load settings: ' + error.message;
+                settingsStatus.textContent = 'Could not load settings: ' + error.message;
             }
         }
 
@@ -3563,14 +3393,14 @@
             showSettingsErrors({});
             settingsStatus.className = 'status success show';
             settingsStatus.textContent = message;
+            toast(message, 'success');
             await loadSystemInfo();
             if (transcriptText) enableAiAnalysis();
         }
 
         settingsSaveBtn.addEventListener('click', async () => {
             settingsSaveBtn.disabled = true;
-            settingsStatus.className = 'status processing show';
-            settingsStatus.innerHTML = '<div class="spinner"></div>Saving...';
+            setStatus(settingsStatus, 'processing', 'Saving...', true);
             try {
                 const response = await fetch('/settings', {
                     method: 'POST',
@@ -3582,10 +3412,10 @@
                     showSettingsErrors(result.errors);
                     throw new Error(result.error || 'Settings were not saved');
                 }
-                await settingsApplied(result, '✅ Saved. These settings apply now and are kept across restarts.');
+                await settingsApplied(result, 'Saved. These settings apply now and are kept across restarts.');
             } catch (error) {
                 settingsStatus.className = 'status error show';
-                settingsStatus.textContent = '❌ ' + error.message;
+                settingsStatus.textContent = error.message;
             } finally {
                 settingsSaveBtn.disabled = false;
             }
@@ -3598,10 +3428,10 @@
                 const response = await fetch('/settings/reset', { method: 'POST' });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.error || 'Settings were not reset');
-                await settingsApplied(result, '✅ Settings are back to their defaults.');
+                await settingsApplied(result, 'Settings are back to their defaults.');
             } catch (error) {
                 settingsStatus.className = 'status error show';
-                settingsStatus.textContent = '❌ ' + error.message;
+                settingsStatus.textContent = error.message;
             } finally {
                 settingsResetBtn.disabled = false;
             }

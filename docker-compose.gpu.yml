@@ -3,9 +3,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gpu
+    # A tag of its own, so a GPU build does not replace the CPU image.
+    image: transcription-service:gpu
     container_name: transcription-service-gpu
+    # This machine only; see docker-compose.yml for the trade-off.
     ports:
-      - "8080:5000"
+      - "127.0.0.1:8080:5000"
     volumes:
       - ./outputs:/app/outputs
       - ./uploads:/app/uploads
